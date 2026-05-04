@@ -25,7 +25,10 @@ if __name__ == "__main__":
         if not robot.GetRobotInfo().num_joints == 6:
             print("Not a 6-axis robot. This program is designed for 6-axis robots, so some features may not work as expected.")
             sys.exit(0)
-        
+
+        # Set linear speed before moving
+        robot.SetCartLinVel(Parameter.MAX_VELOCITY)
+
         # Prepare the robot for operation.
         robot.ActivateAndHome()
         robot.WaitHomed()
@@ -36,9 +39,6 @@ if __name__ == "__main__":
         y_offset = 0.0
         z_offset = 0.0
         robot.SetTrf(x_offset, y_offset, z_offset, 0, 0, 0)
-
-        # Set linear speed
-        robot.SetCartLinVel(Parameter.MAX_VELOCITY)
 
         #  Move the robot to the initial pose defined by the user
         init_pos = [0, 0, 30, 0, -30, 0]
@@ -66,7 +66,6 @@ if __name__ == "__main__":
                 y_val = 0.0
                 z_val = 0.0
 
-
                 # Get user input
                 user_input = input("Enter command (variable=value): ").strip()
                 
@@ -84,6 +83,7 @@ if __name__ == "__main__":
 
                 if variable == 'exit':
                     print("Exiting robot control loop...")
+                    robot.DeactivateRobot()
                     break
 
                 elif variable == 'move':
@@ -160,6 +160,7 @@ if __name__ == "__main__":
 
             except KeyboardInterrupt:
                 print("\nInterrupted by user. Exiting control loop...")
+                robot.DeactivateRobot()
                 break
             except Exception as e:
                 print(f"Error: {e}")
