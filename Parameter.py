@@ -1,5 +1,5 @@
 ROBOT_IP_ADDRESS = "192.168.0.100"
 
+ROBOT_INIT_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # [X, Y, Z, UX, UY, UZ]
 
-MAX_VELOCITY = 0.1  # m/s
-MAX_ACCELERATION = 0.2  # m/s^2
+MAX_VELOCITY = 2  # mm/s
