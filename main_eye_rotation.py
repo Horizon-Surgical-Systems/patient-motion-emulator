@@ -11,16 +11,9 @@ from TrajectoryUtils import TrajectoryUtils
 
 if __name__ == "__main__":
 
-    # Create the mutually exclusive group
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--head", action='store_true', help="Generate head motion")
-    parser.add_argument("--eye", action='store_true', help="Generate eye motion")
-    args = parser.parse_args()
-
     # Open robot connection
     with mdr.Robot() as robot:
         robot.Connect(address=Parameter.ROBOT_IP_ADDRESS, disconnect_on_exception=False)
-
         robot.ActivateRobot()
 
         # Check if the robot is 6DOF
@@ -29,7 +22,7 @@ if __name__ == "__main__":
             sys.exit(0)
 
         # Set linear speed before moving
-        robot.SetCartLinVel(Parameter.MAX_VELOCITY)
+        robot.SetJointVelLimit(Parameter.MAX_JOINT_VEL_PERCENTAGE)
 
         # Prepare the robot for operation.
         robot.ActivateAndHome()
@@ -37,36 +30,35 @@ if __name__ == "__main__":
         print('Robot is homed and ready.')
 
         # Set robot TRF from FRF
-        x_offset = 0.0
-        y_offset = 0.0
-        z_offset = 0.0
+        x_offset = Parameter.EYE_PUCK_OFFSET[0]
+        y_offset = Parameter.EYE_PUCK_OFFSET[1]
+        z_offset = Parameter.EYE_PUCK_OFFSET[2]
         robot.SetTrf(x_offset, y_offset, z_offset, 0, 0, 0)
 
         #  Move the robot to the initial pose defined by the user
-        init_pos = [0, 0, 30, 0, -30, 0]
-        robot.MoveJoints(*init_pos)
+        robot.MoveJoints(*Parameter.ROBOT_EYE_PUCK_INIT_POSE)
         print('Waiting for robot to finish moving to initial pose...')
         robot.WaitIdle(60)
 
         # Interactive control loop
         print("\n=== Robot Control Loop ===")
         print("Enter variable=value pairs to control the robot.")
-        print("Supported variables: 'home', 'print', 'temporal', 'nasal', 'superior', 'inferior', 'upward', 'downward'")
+        print("Supported variables: 'home', 'print', 'temporal', 'nasal', 'superior', 'inferior', 'cw', 'ccw'")
         print("Examples:")
-        print("  move=home  - Perform homing")
-        print("  move=init  - Move to initial pose")
-        print("  print=1    - Print current robot pose")
-        print("  temporal=1 - Perform temporal translation = +1 mm")
-        print("  nasal=2    - Perform nasal translation = +2 mm")
-        print("  exit=1     - Exit the control loop")
+        print("  move=home   - Perform homing")
+        print("  move=init   - Move to initial pose")
+        print("  print=1     - Print current robot pose")
+        print("  temporal=10 - Perform temporal rotation = 10 deg")
+        print("  nasal=10    - Perform nasal rotation = 10 deg")
+        print("  exit=1      - Exit the control loop")
         print()
 
         while True:
             try:
                 # Reset values
-                x_val = 0.0
-                y_val = 0.0
-                z_val = 0.0
+                ux_val = 0.0
+                uy_val = 0.0
+                uz_val = 0.0
 
                 # Get user input
                 user_input = input("Enter command (variable=value): ").strip()
@@ -83,11 +75,19 @@ if __name__ == "__main__":
                     print("Invalid format. Use variable=value format.")
                     continue
 
+                # Impose a hard constraint at 15 deg for safety (only if value is a number)
+                try:
+                    val = float(value)
+                    if abs(val) > 15:
+                        print("Value exceeds 15 deg limit.")
+                        continue
+                except ValueError:
+                    pass
+
                 if variable == 'exit':
                     print("Exiting robot control loop...")
                     robot.DeactivateRobot()
                     break
-
                 elif variable == 'move':
                     if value.lower() == 'home':
                         print('Moving robot to home position...')
@@ -96,7 +96,7 @@ if __name__ == "__main__":
                         print('Robot is at home.')
                     elif value.lower() == 'init':
                         print('Moving robot to initial pose...')
-                        robot.MoveJoints(*init_pos)
+                        robot.MoveJoints(*Parameter.ROBOT_EYE_PUCK_INIT_POSE)
                         robot.WaitIdle(60)
                         print('Robot is at initial pose.')
                     else:
@@ -104,49 +104,49 @@ if __name__ == "__main__":
 
                 elif variable == 'temporal':
                     try:
-                        y_val = float(value)
-                        robot.MoveLinRelTrf(0, y_val, 0, 0, 0, 0)
-                        print(f'Move {y_val} mm {variable} to current')
+                        uy_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, 0, uy_val, 0)
+                        print(f'Move {uy_val} deg {variable} from current')
                     except ValueError:
                         print(f"Invalid value: {value}")
                 
                 elif variable == 'nasal':
                     try:
-                        y_val = float(value)
-                        robot.MoveLinRelTrf(0, -y_val, 0, 0, 0, 0)
-                        print(f'Move {y_val} mm {variable} to current')
+                        uy_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, 0, -uy_val, 0)
+                        print(f'Move {uy_val} deg {variable} from current')
+                    except ValueError:
+                        print(f"Invalid value: {value}")
+
+                elif variable == 'cw':
+                    try:
+                        uz_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, 0, 0, uz_val)
+                        print(f'Move {uz_val} deg {variable} from current')
+                    except ValueError:
+                        print(f"Invalid value: {value}")
+                
+                elif variable == 'ccw':
+                    try:
+                        uz_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, 0, 0, -uz_val)
+                        print(f'Move {uz_val} deg {variable} from current')
                     except ValueError:
                         print(f"Invalid value: {value}")
 
                 elif variable == 'superior':
                     try:
-                        z_val = float(value)
-                        robot.MoveLinRelTrf(0, 0, z_val, 0, 0, 0)
-                        print(f'Move {z_val} mm {variable} to current')
+                        ux_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, ux_val, 0, 0)
+                        print(f'Move {ux_val} deg {variable} from current')
                     except ValueError:
                         print(f"Invalid value: {value}")
                 
                 elif variable == 'inferior':
                     try:
-                        z_val = float(value)
-                        robot.MoveLinRelTrf(0, 0, -z_val, 0, 0, 0)
-                        print(f'Move {z_val} mm {variable} to current')
-                    except ValueError:
-                        print(f"Invalid value: {value}")
-
-                elif variable == 'downward':
-                    try:
-                        x_val = float(value)
-                        robot.MoveLinRelTrf(x_val, 0, 0, 0, 0, 0)
-                        print(f'Move {x_val} mm {variable} to current')
-                    except ValueError:
-                        print(f"Invalid value: {value}")
-                
-                elif variable == 'upward':
-                    try:
-                        x_val = float(value)
-                        robot.MoveLinRelTrf(-x_val, 0, 0, 0, 0, 0)
-                        print(f'Move {x_val} mm {variable} to current')
+                        ux_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, -ux_val, 0, 0)
+                        print(f'Move {ux_val} deg {variable} from current')
                     except ValueError:
                         print(f"Invalid value: {value}")
 
