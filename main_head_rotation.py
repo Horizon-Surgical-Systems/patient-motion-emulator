@@ -30,21 +30,21 @@ if __name__ == "__main__":
         print('Robot is homed and ready.')
 
         # Set robot TRF from FRF
-        x_offset = 0.0
-        y_offset = 0.0
-        z_offset = 40.0
+        x_offset = Parameter.HEAD_OFFSET[0]
+        y_offset = Parameter.HEAD_OFFSET[1]
+        z_offset = Parameter.HEAD_OFFSET[2]
         robot.SetTrf(x_offset, y_offset, z_offset, 0, 0, 0)
 
         #  Move the robot to the initial pose defined by the user
-        init_pos = [0, -20, 20, 0, -90, 0]
-        robot.MoveJoints(*init_pos)
+        # init_pos = [0, -20, 20, 0, -90, 0]
+        robot.MoveJoints(*Parameter.ROBOT_HEAD_INIT_POSE)
         print('Waiting for robot to finish moving to initial pose...')
         robot.WaitIdle(60)
 
         # Interactive control loop
         print("\n=== Robot Control Loop ===")
         print("Enter variable=value pairs to control the robot.")
-        print("Supported variables: 'home', 'print', 'temporal', 'nasal', 'superior', 'inferior'")
+        print("Supported variables: 'home', 'reset', 'print', 'temporal', 'nasal', 'superior', 'inferior'")
         print("Examples:")
         print("  move=home   - Perform homing")
         print("  move=init   - Move to initial pose")
@@ -76,11 +76,11 @@ if __name__ == "__main__":
                     print("Invalid format. Use variable=value format.")
                     continue
 
-                # Impose a hard constraint at 15 deg for safety (only if value is a number)
+                # Impose a hard constraint at 10 deg for safety (only if value is a number)
                 try:
                     val = float(value)
-                    if abs(val) > 15:
-                        print("Value exceeds 15 deg limit.")
+                    if abs(val) > 10:
+                        print("Value exceeds rotation limit.")
                         continue
                 except ValueError:
                     pass
@@ -89,6 +89,11 @@ if __name__ == "__main__":
                     print("Exiting robot control loop...")
                     robot.DeactivateRobot()
                     break
+                elif variable == 'reset':
+                    robot.ResetError()
+                    robot.ActivateAndHome()
+                    robot.WaitHomed()
+                    print('Robot reset and homed.')
                 elif variable == 'move':
                     if value.lower() == 'home':
                         print('Moving robot to home position...')
@@ -97,23 +102,23 @@ if __name__ == "__main__":
                         print('Robot is at home.')
                     elif value.lower() == 'init':
                         print('Moving robot to initial pose...')
-                        robot.MoveJoints(*init_pos)
+                        robot.MoveJoints(*Parameter.ROBOT_HEAD_INIT_POSE)
                         robot.WaitIdle(60)
                         print('Robot is at initial pose.')
                     else:
                         print(f"Unknown move command: {value}")
-                elif variable == 'temporal':
-                    try:
-                        uy_val = float(value)
-                        robot.MoveLinRelTrf(0, 0, 0, 0, uy_val, 0)
-                        print(f'Move {uy_val} deg {variable} from current')
-                    except ValueError:
-                        print(f"Invalid value: {value}")
                 elif variable == 'nasal':
                     try:
-                        uy_val = float(value)
-                        robot.MoveLinRelTrf(0, 0, 0, 0, -uy_val, 0)
-                        print(f'Move {uy_val} deg {variable} from current')
+                        uz_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, 0, 0, uz_val)
+                        print(f'Move {uz_val} deg {variable} from current')
+                    except ValueError:
+                        print(f"Invalid value: {value}")
+                elif variable == 'temporal':
+                    try:
+                        uz_val = float(value)
+                        robot.MoveLinRelTrf(0, 0, 0, 0, 0, -uz_val)
+                        print(f'Move {uz_val} deg {variable} from current')
                     except ValueError:
                         print(f"Invalid value: {value}")
                 elif variable == 'superior':

@@ -29,7 +29,8 @@ if __name__ == "__main__":
             sys.exit(0)
 
         # Set linear speed before moving
-        robot.SetCartLinVel(Parameter.MAX_VELOCITY)
+        robot.SetCartLinVel(2) # mm/s for initial speed
+        print('Set initial linear speed to 2 mm/s')
 
         # Prepare the robot for operation.
         robot.ActivateAndHome()
@@ -37,24 +38,24 @@ if __name__ == "__main__":
         print('Robot is homed and ready.')
 
         # Set robot TRF from FRF
-        x_offset = 0.0
-        y_offset = 0.0
-        z_offset = 0.0
+        x_offset = Parameter.HEAD_OFFSET[0]
+        y_offset = Parameter.HEAD_OFFSET[1]
+        z_offset = Parameter.HEAD_OFFSET[2]
         robot.SetTrf(x_offset, y_offset, z_offset, 0, 0, 0)
 
         #  Move the robot to the initial pose defined by the user
-        init_pos = [0, 0, 30, 0, -30, 0]
-        robot.MoveJoints(*init_pos)
+        robot.MoveJoints(*Parameter.ROBOT_HEAD_INIT_POSE)
         print('Waiting for robot to finish moving to initial pose...')
         robot.WaitIdle(60)
 
         # Interactive control loop
         print("\n=== Robot Control Loop ===")
         print("Enter variable=value pairs to control the robot.")
-        print("Supported variables: 'home', 'print', 'temporal', 'nasal', 'superior', 'inferior', 'upward', 'downward'")
+        print("Supported variables: 'home', 'reset', 'speed', 'print', 'temporal', 'nasal', 'superior', 'inferior', 'upward', 'downward'")
         print("Examples:")
         print("  move=home  - Perform homing")
         print("  move=init  - Move to initial pose")
+        print("  speed=2    - Set linear speed to 2 mm/s")
         print("  print=1    - Print current robot pose")
         print("  temporal=1 - Perform temporal translation = +1 mm")
         print("  nasal=2    - Perform nasal translation = +2 mm")
@@ -87,7 +88,11 @@ if __name__ == "__main__":
                     print("Exiting robot control loop...")
                     robot.DeactivateRobot()
                     break
-
+                elif variable == 'reset':
+                    robot.ResetError()
+                    robot.ActivateAndHome()
+                    robot.WaitHomed()
+                    print('Robot reset and homed.')
                 elif variable == 'move':
                     if value.lower() == 'home':
                         print('Moving robot to home position...')
@@ -96,13 +101,13 @@ if __name__ == "__main__":
                         print('Robot is at home.')
                     elif value.lower() == 'init':
                         print('Moving robot to initial pose...')
-                        robot.MoveJoints(*init_pos)
+                        robot.MoveJoints(*Parameter.ROBOT_HEAD_INIT_POSE)
                         robot.WaitIdle(60)
                         print('Robot is at initial pose.')
                     else:
                         print(f"Unknown move command: {value}")
 
-                elif variable == 'temporal':
+                elif variable == 'upward':
                     try:
                         y_val = float(value)
                         robot.MoveLinRelTrf(0, y_val, 0, 0, 0, 0)
@@ -110,7 +115,7 @@ if __name__ == "__main__":
                     except ValueError:
                         print(f"Invalid value: {value}")
                 
-                elif variable == 'nasal':
+                elif variable == 'downward':
                     try:
                         y_val = float(value)
                         robot.MoveLinRelTrf(0, -y_val, 0, 0, 0, 0)
@@ -134,7 +139,7 @@ if __name__ == "__main__":
                     except ValueError:
                         print(f"Invalid value: {value}")
 
-                elif variable == 'downward':
+                elif variable == 'temporal':
                     try:
                         x_val = float(value)
                         robot.MoveLinRelTrf(x_val, 0, 0, 0, 0, 0)
@@ -142,11 +147,22 @@ if __name__ == "__main__":
                     except ValueError:
                         print(f"Invalid value: {value}")
                 
-                elif variable == 'upward':
+                elif variable == 'nasal':
                     try:
                         x_val = float(value)
                         robot.MoveLinRelTrf(-x_val, 0, 0, 0, 0, 0)
                         print(f'Move {x_val} mm {variable} to current')
+                    except ValueError:
+                        print(f"Invalid value: {value}")
+
+                elif variable == 'speed':
+                    try:
+                        speed_val = float(value)
+                        if speed_val <= 0 or speed_val > Parameter.MAX_VELOCITY:
+                            print(f"Speed must be between 0 and {Parameter.MAX_VELOCITY} mm/s")
+                            continue
+                        robot.SetCartLinVel(speed_val)
+                        print(f'Set linear speed to {speed_val} mm/s')
                     except ValueError:
                         print(f"Invalid value: {value}")
 
@@ -157,6 +173,9 @@ if __name__ == "__main__":
                     else:
                         print(f"Unknown print command: {value}")
 
+                elif variable == 'shipping':
+                    robot.MoveJoints(0,0,0,0,0,0)
+                    print("Robot is now in shipping mode.")
                 else:
                     print(f"Unknown variable: {variable}")
 
