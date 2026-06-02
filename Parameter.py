@@ -34,6 +34,7 @@ ADDR_GOAL_POSITION    = 116
 ADDR_PRESENT_POSITION = 132
 
 POSITION_CONTROL_MODE = 3
+COUNTS_PER_REV        = 4096   # XL-330 encoder resolution (counts per revolution)
 
 #  JOINT LIMITS
 #
@@ -51,6 +52,8 @@ JOINT_MIN_2 = 1536
 JOINT_MAX_2 = 2560
 
 #  MOVEMENT TUNING
-STEP_SIZE  = 90       # encoder counts per loop tick while key held
-LOOP_HZ    = 50       # control loop rate (Hz)
-LOOP_DELAY = 1.0 / LOOP_HZ
+STEP_SIZE     = 44        # encoder counts per loop tick while key held
+LOOP_HZ       = 50        # control loop rate (Hz)
+LOOP_DELAY    = 1.0 / LOOP_HZ
+
+HEAD_STEP_DEG = 0.5       # degrees per loop tick for Meca500 head rotation
