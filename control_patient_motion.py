@@ -1,41 +1,34 @@
 import argparse
 import atexit
+import time
+import csv
+import os
 import tkinter as tk
+from tkinter import filedialog
 import Parameter as params
 import mecademicpy.robot as mdr
 from dynamixel_sdk import PortHandler, PacketHandler
 from pynput import keyboard
 from Utils import *
 
-# ─────────────────────────────────────────────
-#  KEY STATE
-#  WASD      → eye gimbal (Dynamixel)
-#  Arrow keys → head      (Meca500)
-# ─────────────────────────────────────────────
-gimbal_keys    = {'up': False, 'down': False, 'left': False, 'right': False}
-head_keys      = {'up': False, 'down': False, 'left': False, 'right': False}
-quit_flag      = False
-robot_instance = None   # used by on_release to clear motion
-
 
 def on_press(key):
-    global quit_flag
     try:
         char = key.char.lower() if hasattr(key, 'char') and key.char else None
 
-        if   char == 'w':               gimbal_keys['up']    = True
-        elif char == 's':               gimbal_keys['down']  = True
-        elif char == 'a':               gimbal_keys['left']  = True
-        elif char == 'd':               gimbal_keys['right'] = True
+        if   char == 'w':               params.GIMBAL_KEYS['up']    = True
+        elif char == 's':               params.GIMBAL_KEYS['down']  = True
+        elif char == 'a':               params.GIMBAL_KEYS['left']  = True
+        elif char == 'd':               params.GIMBAL_KEYS['right'] = True
         elif char == 'q':
-            quit_flag = True
+            params.QUIT_FLAG = True
             return False
-        elif key == keyboard.Key.up:    head_keys['up']    = True
-        elif key == keyboard.Key.down:  head_keys['down']  = True
-        elif key == keyboard.Key.left:  head_keys['left']  = True
-        elif key == keyboard.Key.right: head_keys['right'] = True
+        elif key == keyboard.Key.up:    params.HEAD_KEYS['up']    = True
+        elif key == keyboard.Key.down:  params.HEAD_KEYS['down']  = True
+        elif key == keyboard.Key.left:  params.HEAD_KEYS['left']  = True
+        elif key == keyboard.Key.right: params.HEAD_KEYS['right'] = True
         elif key == keyboard.Key.esc:
-            quit_flag = True
+            params.QUIT_FLAG = True
             return False
 
     except AttributeError:
@@ -43,24 +36,21 @@ def on_press(key):
 
 
 def on_release(key):
-    global robot_instance
     try:
         char = key.char.lower() if hasattr(key, 'char') and key.char else None
 
-        if   char == 'w':               gimbal_keys['up']    = False
-        elif char == 's':               gimbal_keys['down']  = False
-        elif char == 'a':               gimbal_keys['left']  = False
-        elif char == 'd':               gimbal_keys['right'] = False
-        elif key == keyboard.Key.up:    head_keys['up']    = False
-        elif key == keyboard.Key.down:  head_keys['down']  = False
-        elif key == keyboard.Key.left:  head_keys['left']  = False
-        elif key == keyboard.Key.right: head_keys['right'] = False
+        if   char == 'w':               params.GIMBAL_KEYS['up']    = False
+        elif char == 's':               params.GIMBAL_KEYS['down']  = False
+        elif char == 'a':               params.GIMBAL_KEYS['left']  = False
+        elif char == 'd':               params.GIMBAL_KEYS['right'] = False
+        elif key == keyboard.Key.up:    params.HEAD_KEYS['up']    = False
+        elif key == keyboard.Key.down:  params.HEAD_KEYS['down']  = False
+        elif key == keyboard.Key.left:  params.HEAD_KEYS['left']  = False
+        elif key == keyboard.Key.right: params.HEAD_KEYS['right'] = False
 
-        # Clear the robot's motion queue once all head keys are released
-        # so the head stops promptly rather than draining queued moves.
-        if robot_instance and not any(head_keys.values()):
+        if params.ROBOT_INSTANCE and not any(params.HEAD_KEYS.values()):
             try:
-                robot_instance.ClearMotion()
+                params.ROBOT_INSTANCE.ClearMotion()
             except Exception:
                 pass
 
@@ -84,9 +74,19 @@ class ControlWindow:
         self.pos1          = 2047
         self.pos2          = 2047
 
+        # Playback state
+        self.playback_data  = []    # list of (time_ms, pitch, roll), t=0 at first sample
+        self.playback_idx   = 0
+        self.is_playing     = False
+        self.playback_start = 0.0   # monotonic time when playback began
+        self.prev_pitch     = 0.0
+        self.prev_roll      = 0.0
+
         self._build_ui()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._tick()
+
+    # ── UI ────────────────────────────────────
 
     def _build_ui(self):
         self.root.title("Patient Motion Control Panel")
@@ -95,9 +95,9 @@ class ControlWindow:
 
         pad = {'padx': 10, 'pady': 4}
 
+        # ── Gimbal speed ──────────────────────
         tk.Label(self.root, text="STEP_SIZE  (counts / tick)").pack(**pad)
 
-        # Slider + spinbox share one IntVar — changes to either update both
         self.step_var = tk.IntVar(value=params.STEP_SIZE)
 
         tk.Scale(self.root, from_=1, to=90, orient=tk.HORIZONTAL,
@@ -107,7 +107,6 @@ class ControlWindow:
         tk.Spinbox(self.root, from_=1, to=90, textvariable=self.step_var,
                    width=6, font=('Helvetica', 13)).pack(**pad)
 
-        # Velocity preview — create label before adding trace so it exists when trace fires
         self.vel_label = tk.Label(self.root, text="", font=('Helvetica', 13))
         self.vel_label.pack(**pad)
         self._update_vel()
@@ -115,7 +114,7 @@ class ControlWindow:
 
         tk.Frame(self.root, height=1, bg='grey').pack(fill='x', padx=10, pady=6)
 
-        # Key bindings reminder
+        # ── Key bindings ──────────────────────
         if self.use_eye:
             tk.Label(self.root, text="W / S   Eye Superior / Inferior").pack(**pad)
             tk.Label(self.root, text="A / D   Eye Temporal / Nasal").pack(**pad)
@@ -123,6 +122,37 @@ class ControlWindow:
             tk.Label(self.root, text="↑ / ↓   Head Superior / Inferior").pack(**pad)
             tk.Label(self.root, text="← / →   Head Temporal / Nasal").pack(**pad)
         tk.Label(self.root, text="Q / ESC   Quit", fg='grey').pack(**pad)
+
+        # ── Motion playback (head only) ───────
+        if self.use_head:
+            tk.Frame(self.root, height=1, bg='grey').pack(fill='x', padx=10, pady=6)
+
+            tk.Label(self.root, text="Motion Playback",
+                     font=('Helvetica', 12, 'bold')).pack(**pad)
+
+            self.file_label = tk.Label(self.root, text="No file loaded",
+                                       fg='grey', wraplength=280)
+            self.file_label.pack(**pad)
+
+            tk.Button(self.root, text="Browse...",
+                      command=self._browse_file).pack(**pad)
+
+            self.info_label = tk.Label(self.root, text="", fg='grey')
+            self.info_label.pack(**pad)
+
+            btn_row = tk.Frame(self.root)
+            btn_row.pack(**pad)
+            self.play_btn = tk.Button(btn_row, text="Play", width=8,
+                                      command=self._start_playback,
+                                      state=tk.DISABLED)
+            self.play_btn.pack(side=tk.LEFT, padx=4)
+            self.stop_btn = tk.Button(btn_row, text="Stop", width=8,
+                                      command=self._stop_playback,
+                                      state=tk.DISABLED)
+            self.stop_btn.pack(side=tk.LEFT, padx=4)
+
+            self.progress_label = tk.Label(self.root, text="")
+            self.progress_label.pack(**pad)
 
     def _update_vel(self):
         try:
@@ -134,8 +164,82 @@ class ControlWindow:
         rpm            = counts_per_sec / params.COUNTS_PER_REV * 60
         self.vel_label.config(text=f"{deg_per_sec:.1f} °/s   {rpm:.1f} RPM")
 
+    # ── Motion file I/O ───────────────────────
+
+    def _browse_file(self):
+        motion_dir = os.path.join(os.path.dirname(__file__), params.MOTION_DATA_FOLDER)
+        path = filedialog.askopenfilename(
+            initialdir=motion_dir,
+            title="Select motion data file",
+            filetypes=[("Text/CSV files", "*.txt *.csv"), ("All files", "*.*")]
+        )
+        if path:
+            self._load_file(path)
+
+    def _load_file(self, path):
+        data = []
+        try:
+            with open(path, newline='') as f:
+                reader = csv.reader(f)
+                next(reader)    # skip header: time,gyro0..2,act0..2,pitch,roll
+                for row in reader:
+                    if len(row) < 9:
+                        continue
+                    t     = int(float(row[0]))
+                    pitch = float(row[7])
+                    roll  = float(row[8])
+                    data.append((t, pitch, roll))
+        except Exception as e:
+            self.file_label.config(text=f"Error loading file: {e}", fg='red')
+            return
+
+        if not data:
+            self.file_label.config(text="No valid data found", fg='red')
+            return
+
+        # Normalize timestamps so playback starts at t=0
+        t0 = data[0][0]
+        self.playback_data = [(t - t0, p, r) for t, p, r in data]
+        self.playback_idx  = 0
+        self.is_playing    = False
+
+        duration_s = self.playback_data[-1][0] / 1000.0
+        self.file_label.config(text=os.path.basename(path), fg='black')
+        self.info_label.config(
+            text=f"{len(data)} samples  ·  {duration_s:.1f} s", fg='grey')
+        self.play_btn.config(state=tk.NORMAL)
+        self.progress_label.config(text="")
+
+    # ── Playback control ──────────────────────
+
+    def _start_playback(self):
+        if not self.playback_data or not self.robot:
+            return
+        self.playback_idx   = 0
+        self.prev_pitch     = self.playback_data[0][1]
+        self.prev_roll      = self.playback_data[0][2]
+        self.playback_start = time.monotonic()
+        self.is_playing     = True
+        self.play_btn.config(state=tk.DISABLED)
+        self.stop_btn.config(state=tk.NORMAL)
+        self.progress_label.config(text="Playing...")
+
+    def _stop_playback(self):
+        self.is_playing = False
+        if self.robot:
+            try:
+                self.robot.ClearMotion()
+            except Exception:
+                pass
+        if self.use_head:
+            self.play_btn.config(state=tk.NORMAL if self.playback_data else tk.DISABLED)
+            self.stop_btn.config(state=tk.DISABLED)
+            self.progress_label.config(text="Stopped")
+
+    # ── Control loop ──────────────────────────
+
     def _tick(self):
-        if quit_flag:
+        if params.QUIT_FLAG:
             self._on_close()
             return
 
@@ -144,46 +248,78 @@ class ControlWindow:
         except tk.TclError:
             step = params.STEP_SIZE
 
-        # ── Eye gimbal: WASD ──────────────────────
+        # ── Eye gimbal: WASD ──────────────────
         if self.use_eye:
-            if gimbal_keys['up']:
+            if params.GIMBAL_KEYS['up']:
                 new1 = clamp(self.pos1 + step, params.JOINT_MIN_1, params.JOINT_MAX_1)
                 if new1 != self.pos1:
                     self.pos1 = new1
                     write_position(self.portHandler, self.packetHandler, params.DXL_1, self.pos1)
-            elif gimbal_keys['down']:
+            elif params.GIMBAL_KEYS['down']:
                 new1 = clamp(self.pos1 - step, params.JOINT_MIN_1, params.JOINT_MAX_1)
                 if new1 != self.pos1:
                     self.pos1 = new1
                     write_position(self.portHandler, self.packetHandler, params.DXL_1, self.pos1)
 
-            if gimbal_keys['left']:
+            if params.GIMBAL_KEYS['left']:
                 new2 = clamp(self.pos2 + step, params.JOINT_MIN_2, params.JOINT_MAX_2)
                 if new2 != self.pos2:
                     self.pos2 = new2
                     write_position(self.portHandler, self.packetHandler, params.DXL_2, self.pos2)
-            elif gimbal_keys['right']:
+            elif params.GIMBAL_KEYS['right']:
                 new2 = clamp(self.pos2 - step, params.JOINT_MIN_2, params.JOINT_MAX_2)
                 if new2 != self.pos2:
                     self.pos2 = new2
                     write_position(self.portHandler, self.packetHandler, params.DXL_2, self.pos2)
 
-        # ── Head: arrow keys ──────────────────────
-        if self.use_head:
-            if head_keys['up']:
+        # ── Head: arrow keys (disabled during playback) ──
+        if self.use_head and not self.is_playing:
+            if params.HEAD_KEYS['up']:
                 self.robot.MoveLinRelTrf(0, 0, 0,  params.HEAD_STEP_DEG, 0, 0)
-            elif head_keys['down']:
+            elif params.HEAD_KEYS['down']:
                 self.robot.MoveLinRelTrf(0, 0, 0, -params.HEAD_STEP_DEG, 0, 0)
 
-            if head_keys['left']:
+            if params.HEAD_KEYS['left']:
                 self.robot.MoveLinRelTrf(0, 0, 0, 0, 0, -params.HEAD_STEP_DEG)
-            elif head_keys['right']:
+            elif params.HEAD_KEYS['right']:
                 self.robot.MoveLinRelTrf(0, 0, 0, 0, 0,  params.HEAD_STEP_DEG)
+
+        # ── Motion playback ───────────────────
+        if self.use_head and self.is_playing and self.robot:
+            elapsed_ms = (time.monotonic() - self.playback_start) * 1000.0
+
+            while self.playback_idx < len(self.playback_data):
+                t_ms, pitch, roll = self.playback_data[self.playback_idx]
+                if t_ms > elapsed_ms:
+                    break
+
+                delta_pitch = pitch - self.prev_pitch
+                delta_roll  = roll  - self.prev_roll
+
+                # Skip outlier jumps (sensor glitches / discontinuities)
+                if abs(delta_pitch) < 5.0 and abs(delta_roll) < 5.0:
+                    if abs(delta_pitch) > 0.01 or abs(delta_roll) > 0.01:
+                        self.robot.MoveLinRelTrf(0, 0, 0, delta_pitch, 0, delta_roll)
+
+                self.prev_pitch = pitch
+                self.prev_roll  = roll
+                self.playback_idx += 1
+
+            if self.playback_idx >= len(self.playback_data):
+                self._stop_playback()
+                self.progress_label.config(text="Done")
+            else:
+                pct       = int(100 * self.playback_idx / len(self.playback_data))
+                elapsed_s = elapsed_ms / 1000.0
+                self.progress_label.config(text=f"{elapsed_s:.1f} s  ({pct}%)")
 
         self.root.after(int(1000 / params.LOOP_HZ), self._tick)
 
+    # ── Shutdown ──────────────────────────────
+
     def _on_close(self):
-        global robot_instance
+        if self.is_playing:
+            self._stop_playback()
 
         self.listener.stop()
 
@@ -202,7 +338,7 @@ class ControlWindow:
             except Exception:
                 pass
 
-        robot_instance = None
+        params.ROBOT_INSTANCE = None
         enable_echo()
         self.root.destroy()
 
@@ -212,12 +348,13 @@ class ControlWindow:
 # ─────────────────────────────────────────────
 
 def main():
-    global robot_instance
-
-    parser = argparse.ArgumentParser(description='Keyboard control for head (Meca500) and/or eye gimbal (Dynamixel)')
+    parser = argparse.ArgumentParser(
+        description='Patient motion control — head (Meca500) and/or eye gimbal (Dynamixel)')
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('--head', action='store_true', help='Control head only (Meca500, arrow keys)')
-    group.add_argument('--eye',  action='store_true', help='Control eye gimbal only (Dynamixel, WASD)')
+    group.add_argument('--head', action='store_true',
+                       help='Control head only (Meca500, arrow keys)')
+    group.add_argument('--eye',  action='store_true',
+                       help='Control eye gimbal only (Dynamixel, WASD)')
     args = parser.parse_args()
 
     use_head = not args.eye
@@ -242,7 +379,7 @@ def main():
         robot.WaitIdle(60)
         print("Robot at initial pose.")
 
-        robot_instance = robot
+        params.ROBOT_INSTANCE = robot
 
     # ── Dynamixel ─────────────────────────────
     if use_eye:

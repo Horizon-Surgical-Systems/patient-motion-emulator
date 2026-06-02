@@ -57,3 +57,13 @@ LOOP_HZ       = 50        # control loop rate (Hz)
 LOOP_DELAY    = 1.0 / LOOP_HZ
 
 HEAD_STEP_DEG = 0.5       # degrees per loop tick for Meca500 head rotation
+
+MOTION_DATA_FOLDER = 'motion_data'   # folder containing IMU motion recording txt files
+
+# ─────────────────────────────────────────────
+#  RUNTIME STATE
+# ─────────────────────────────────────────────
+GIMBAL_KEYS    = {'up': False, 'down': False, 'left': False, 'right': False}
+HEAD_KEYS      = {'up': False, 'down': False, 'left': False, 'right': False}
+QUIT_FLAG      = False
+ROBOT_INSTANCE = None
