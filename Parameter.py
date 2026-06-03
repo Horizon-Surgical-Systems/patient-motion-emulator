@@ -5,12 +5,23 @@ ROBOT_INIT_POSE = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # [X, Y, Z, UX, UY, UZ]
 ROBOT_EYE_PUCK_INIT_POSE = [0.0, -20.0, 20.0, 0.0, -90.0, 0.0]  # [X, Y, Z, UX, UY, UZ]
 EYE_PUCK_OFFSET = [0.0, 0.0, 40.0] # [X, Y, Z] in mm
 
-ROBOT_HEAD_INIT_POSE = [0, -30, 30, 90, -90, 75]  # [X, Y, Z, UX, UY, UZ]
-HEAD_OFFSET = [0.0, -80.0, 0.0] # [X, Y, Z] in mm
+ROBOT_HEAD_INIT_POSE = [0, -30, 30, 90, -90, 0]   # joint angles [J1..J6] in degrees
+HEAD_OFFSET = [0.0, -80.0, 0.0]                    # [X, Y, Z] in mm
 
+# Meca500 joint travel limits [min, max] in degrees (per hardware datasheet)
+MECA500_JOINT_LIMITS = [
+    (-170, 170),   # J1
+    ( -70,  90),   # J2
+    (-135,  70),   # J3
+    (-170, 170),   # J4
+    (-115, 115),   # J5
+    (-360, 360),   # J6
+]
 
-MAX_VELOCITY = 20  # mm/s
+MAX_VELOCITY          = 20   # mm/s
 MAX_JOINT_VEL_PERCENTAGE = 2  # %
+JOINT_VEL_MIN         = 0.2  # % — lower bound for UI velocity slider
+JOINT_VEL_MAX         = 5.0  # % — upper bound for UI velocity slider
 
 # ---------------------
 # Eye Gimbal Parameters

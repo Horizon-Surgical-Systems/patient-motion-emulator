@@ -82,6 +82,11 @@ class ControlWindow:
         self.prev_pitch     = 0.0
         self.prev_roll      = 0.0
 
+        # Joint jog state
+        self.joint_vars    = []
+        self.jog_vel_var   = None
+        self._jog_after_id = None
+
         self._build_ui()
         root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._tick()
@@ -153,6 +158,38 @@ class ControlWindow:
 
             self.progress_label = tk.Label(self.root, text="")
             self.progress_label.pack(**pad)
+
+            # ── Joint Jog ─────────────────────────
+            tk.Frame(self.root, height=1, bg='grey').pack(fill='x', padx=10, pady=6)
+
+            tk.Label(self.root, text="Joint Jog",
+                     font=('Helvetica', 12, 'bold')).pack(**pad)
+
+            # Velocity row
+            vel_row = tk.Frame(self.root)
+            vel_row.pack(padx=10, pady=3, fill='x')
+            tk.Label(vel_row, text="Velocity", width=8, anchor='w').pack(side=tk.LEFT)
+            self.jog_vel_var = tk.DoubleVar(value=params.MAX_JOINT_VEL_PERCENTAGE)
+            tk.Scale(vel_row, from_=params.JOINT_VEL_MIN, to=params.JOINT_VEL_MAX,
+                     resolution=0.1, orient=tk.HORIZONTAL,
+                     variable=self.jog_vel_var, length=190).pack(side=tk.LEFT)
+            tk.Label(vel_row, text="%").pack(side=tk.LEFT)
+            self.jog_vel_var.trace_add('write', lambda *_: self._apply_vel_limit())
+
+            # One slider per joint, initialized to init pose
+            joint_labels = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6']
+            for i, (label, angle) in enumerate(
+                    zip(joint_labels, params.ROBOT_HEAD_INIT_POSE)):
+                lo, hi = params.MECA500_JOINT_LIMITS[i]
+                row = tk.Frame(self.root)
+                row.pack(padx=10, pady=2, fill='x')
+                tk.Label(row, text=label, width=3, anchor='w').pack(side=tk.LEFT)
+                var = tk.DoubleVar(value=angle)
+                tk.Scale(row, from_=lo, to=hi, resolution=0.5,
+                         orient=tk.HORIZONTAL, variable=var,
+                         length=220).pack(side=tk.LEFT)
+                var.trace_add('write', lambda *_: self._schedule_jog())
+                self.joint_vars.append(var)
 
     def _update_vel(self):
         try:
@@ -235,6 +272,31 @@ class ControlWindow:
             self.play_btn.config(state=tk.NORMAL if self.playback_data else tk.DISABLED)
             self.stop_btn.config(state=tk.DISABLED)
             self.progress_label.config(text="Stopped")
+
+    # ── Joint jog ─────────────────────────────
+
+    def _apply_vel_limit(self):
+        if not self.robot or not self.jog_vel_var:
+            return
+        try:
+            self.robot.SetJointVelLimit(self.jog_vel_var.get())
+        except Exception:
+            pass
+
+    def _schedule_jog(self):
+        if self._jog_after_id:
+            self.root.after_cancel(self._jog_after_id)
+        self._jog_after_id = self.root.after(300, self._jog_joints)
+
+    def _jog_joints(self):
+        if not self.robot or not self.joint_vars:
+            return
+        try:
+            self.robot.ClearMotion()
+            self.robot.SetJointVelLimit(self.jog_vel_var.get())
+            self.robot.MoveJoints(*[v.get() for v in self.joint_vars])
+        except Exception:
+            pass
 
     # ── Control loop ──────────────────────────
 
@@ -367,19 +429,25 @@ def main():
     # ── Meca500 ───────────────────────────────
     if use_head:
         print("Connecting to Meca500...")
-        robot = mdr.Robot()
-        robot.Connect(address=params.ROBOT_IP_ADDRESS, disconnect_on_exception=False)
-        robot.ActivateAndHome()
-        robot.WaitHomed()
-        print("Robot homed.")
+        try:
+            robot = mdr.Robot()
+            robot.Connect(address=params.ROBOT_IP_ADDRESS, disconnect_on_exception=False)
+            robot.ActivateRobot()
+            robot.ActivateAndHome()
+            robot.WaitHomed()
+            print("Robot homed.")
 
-        robot.SetTrf(params.HEAD_OFFSET[0], params.HEAD_OFFSET[1], params.HEAD_OFFSET[2], 0, 0, 0)
-        robot.SetJointVelLimit(params.MAX_JOINT_VEL_PERCENTAGE)
-        robot.MoveJoints(*params.ROBOT_HEAD_INIT_POSE)
-        robot.WaitIdle(60)
-        print("Robot at initial pose.")
+            robot.SetTrf(params.HEAD_OFFSET[0], params.HEAD_OFFSET[1], params.HEAD_OFFSET[2], 0, 0, 0)
+            robot.SetJointVelLimit(params.MAX_JOINT_VEL_PERCENTAGE)
+            robot.MoveJoints(*params.ROBOT_HEAD_INIT_POSE)
+            robot.WaitIdle(60)
+            print("Robot at initial pose.")
 
-        params.ROBOT_INSTANCE = robot
+            params.ROBOT_INSTANCE = robot
+        except Exception as e:
+            print(f"WARNING: Could not connect to Meca500 — {e}")
+            print("Opening UI without head control.")
+            robot = None
 
     # ── Dynamixel ─────────────────────────────
     if use_eye:
