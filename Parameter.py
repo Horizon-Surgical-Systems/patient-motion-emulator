@@ -24,11 +24,12 @@ JOINT_VEL_MIN         = 0.2  # % — lower bound for UI velocity slider
 JOINT_VEL_MAX         = 5.0  # % — upper bound for UI velocity slider
 
 # ---------------------
-# Eye Gimbal Parameters
+# Eye Gimbal Parametersf
 # ---------------------
 
 # Motor Configuration
-PORT      = '/dev/cu.usbmodem101'
+# PORT      = '/dev/cu.usbmodem101'
+PORT      = '/dev/ttyACM0'
 BAUD_RATE = 57600
 PROTOCOL  = 2.0
 
@@ -67,7 +68,7 @@ STEP_SIZE     = 44        # encoder counts per loop tick while key held
 LOOP_HZ       = 50        # control loop rate (Hz)
 LOOP_DELAY    = 1.0 / LOOP_HZ
 
-HEAD_STEP_DEG = 0.5       # degrees per loop tick for Meca500 head rotation
+HEAD_STEP_DEG = 2       # degrees per loop tick for Meca500 head rotation
 
 MOTION_DATA_FOLDER = 'motion_data'   # folder containing IMU motion recording txt files
 
