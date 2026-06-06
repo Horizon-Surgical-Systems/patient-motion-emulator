@@ -1,5 +1,6 @@
 import argparse
 import atexit
+import sys
 import tkinter as tk
 import Parameter as params
 import mecademicpy.robot as mdr
@@ -83,6 +84,14 @@ def main():
 
     # ── Dynamixel ─────────────────────────────
     if use_eye:
+        if sys.platform == 'darwin':
+            params.PORT = '/dev/cu.usbmodem101'
+        elif sys.platform.startswith('linux'):
+            params.PORT = '/dev/ttyACM0'
+        elif sys.platform == 'win32':
+            params.PORT = 'COM3'
+        print(f"Serial port: {params.PORT}")
+
         portHandler   = PortHandler(params.PORT)
         packetHandler = PacketHandler(params.PROTOCOL)
 

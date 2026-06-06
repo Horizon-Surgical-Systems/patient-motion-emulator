@@ -221,4 +221,5 @@ __marimo__/
 .DS_Store
 
 # Custom
-/motion_data/
+/head_motion_profile/
+/eye_motion_profile/

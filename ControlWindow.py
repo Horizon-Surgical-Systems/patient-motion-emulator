@@ -16,6 +16,12 @@ _SEP   = "#313244"
 _GREEN = "#a6e3a1"
 _RED   = "#f38ba8"
 
+# Light button colours — macOS reliably shows black text on these
+_BTN_PURPLE = "#c4bbfc"   # accent actions  (Browse, Set Home, Reset Error)
+_BTN_GREEN  = "#a6e3a1"   # positive actions (Play, Go Home)
+_BTN_RED    = "#f38ba8"   # destructive      (Stop)
+_BTN_GRAY   = "#9399b2"   # jog arrows
+
 
 class ControlWindow:
     def __init__(self, root, use_head, use_eye, robot, portHandler, packetHandler, listener):
@@ -80,10 +86,10 @@ class ControlWindow:
     def _sep(self, parent):
         tk.Frame(parent, bg=_SEP, height=1).pack(fill='x', pady=(4, 6))
 
-    def _btn(self, parent, text, command, color=_ACCT, fg='#ffffff', width=10):
+    def _btn(self, parent, text, command, color=_BTN_PURPLE, fg='black', width=10):
         b = tk.Button(parent, text=text, command=command,
                       bg=color, fg=fg, activebackground=self._lighten(color),
-                      activeforeground=fg,
+                      activeforeground=fg, disabledforeground='#888888',
                       font=('Arial', 9, 'bold'),
                       relief='flat', bd=0, padx=10, pady=5,
                       cursor='hand2', width=width)
@@ -99,14 +105,14 @@ class ControlWindow:
     def _jog_btn(self, parent, label, axis, sign, width=3):
         """Labeled jog button that sends incremental TRF moves while held."""
         b = tk.Button(parent, text=label, width=width,
-                      bg=_SEP, fg=_FG, activebackground=_ACCT,
-                      activeforeground='#ffffff',
+                      bg=_BTN_GRAY, fg='black', activebackground=self._lighten(_BTN_GRAY),
+                      activeforeground='black', disabledforeground='#888888',
                       font=('Arial', 11, 'bold'),
                       relief='flat', bd=0, padx=6, pady=6, cursor='hand2')
         b.bind('<ButtonPress-1>',   lambda _: self._start_trf_jog(axis, sign))
         b.bind('<ButtonRelease-1>', lambda _: self._stop_trf_jog())
-        b.bind('<Enter>', lambda _: b.config(bg=self._lighten(_SEP)))
-        b.bind('<Leave>', lambda _: b.config(bg=_SEP))
+        b.bind('<Enter>', lambda _: b.config(bg=self._lighten(_BTN_GRAY)))
+        b.bind('<Leave>', lambda _: b.config(bg=_BTN_GRAY))
         return b
 
     # ── UI ────────────────────────────────────
@@ -197,11 +203,11 @@ class ControlWindow:
             btn_row = tk.Frame(card, bg=_CARD)
             btn_row.pack(fill='x', pady=(0, 6))
             self.play_btn = self._btn(btn_row, "▶  Play", self._start_playback,
-                                      color=_GREEN, fg='#1e1e2e', width=9)
+                                      color=_BTN_GREEN, fg='black', width=9)
             self.play_btn.config(state=tk.DISABLED)
             self.play_btn.pack(side=tk.LEFT, padx=(0, 6))
             self.stop_btn = self._btn(btn_row, "■  Stop", self._stop_playback,
-                                      color=_RED, fg='#1e1e2e', width=9)
+                                      color=_BTN_RED, fg='black', width=9)
             self.stop_btn.config(state=tk.DISABLED)
             self.stop_btn.pack(side=tk.LEFT)
 
@@ -304,12 +310,12 @@ class ControlWindow:
             home_row = tk.Frame(card, bg=_CARD)
             home_row.pack(fill='x', pady=(0, 4))
             self._btn(home_row, "Set Home", self._set_trf_home,
-                      color=_ACCT, width=10).pack(side=tk.LEFT, padx=(0, 6))
+                      color=_BTN_PURPLE, fg='black', width=10).pack(side=tk.LEFT, padx=(0, 6))
             self._btn(home_row, "Go Home", self._go_trf_home,
-                      color=_GREEN, fg='#1e1e2e', width=10).pack(side=tk.LEFT)
+                      color=_BTN_GREEN, fg='black', width=10).pack(side=tk.LEFT)
 
             self._btn(card, "Reset Error", self._reset_robot_error,
-                      color=_RED, width=12).pack(anchor='w')
+                      color=_BTN_RED, fg='black', width=12).pack(anchor='w')
 
         tk.Frame(self.root, bg=_BG, height=8).pack()
 
