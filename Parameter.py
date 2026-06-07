@@ -81,11 +81,41 @@ LOOP_DELAY = 1.0 / LOOP_HZ
 HEAD_STEP_DEG = 2         # degrees per loop tick for Meca500 head rotation
 
 # ─────────────────────────────────────────────
+#  Head Motion Coordinate Mapping
+# ─────────────────────────────────────────────
+#
+#  IMU frame (sensor mounted on forehead):
+#    +X  =  temporal  (toward right ear)
+#    +Y  =  inferior  (toward chin, downward)
+#    +Z  =  out of face (normal to forehead, forward-upward)
+#
+#  The IMU fusion algorithm outputs gravity-referenced Euler angles:
+#    pitch  →  sagittal-plane tilt:  extension(+) / flexion(-)
+#    roll   →  frontal-plane tilt:   right tilt(+) / left tilt(-)
+#
+#  Robot TRF mapping  (MoveLinRelTrf dux, duy, duz):
+#    pitch  → UX  (rotation about TRF X)  — sagittal plane / nodding
+#    roll   → UZ  (rotation about TRF Z)  — frontal plane  / lateral tilt
+#    yaw    → UY  (rotation about TRF Y)  — axial rotation — NOT in data
+#
+#  Signs below map IMU positive direction to robot positive UX / UZ.
+#  Verify empirically: play a file and confirm the robot moves in the
+#  expected direction; negate the sign if it is inverted.
+#
+HEAD_PITCH_SIGN = +1   # +1: IMU extension(+pitch) → robot UX(+); −1: invert
+HEAD_ROLL_SIGN  = +1   # +1: IMU right tilt(+roll)  → robot UZ(+); −1: invert
+
+# Window used to compute the resting-pose baseline at the start of each file.
+# Samples within this many milliseconds of t=0 are averaged to form the
+# reference pitch/roll; all subsequent samples are expressed relative to it.
+HEAD_BASELINE_MS = 500
+
+# ─────────────────────────────────────────────
 #  File Paths
 # ─────────────────────────────────────────────
 
-MOTION_DATA_FOLDER        = 'motion_data'
-EYE_MOTION_PROFILE_FOLDER = 'eye_motion_profile'
+HEAD_MOTION_PROFILE_FOLDER = 'head_motion_profile'
+EYE_MOTION_PROFILE_FOLDER  = 'eye_motion_profile'
 
 # ─────────────────────────────────────────────
 #  Runtime State

@@ -607,18 +607,26 @@ class ControlWindow:
     # ─────────────────────────────────────────
 
     def _browse_file(self) -> None:
-        """Open a file-chooser dialog and load the selected motion CSV."""
-        motion_dir = os.path.join(os.path.dirname(__file__), params.MOTION_DATA_FOLDER)
+        """Open a file-chooser dialog and load the selected head motion CSV."""
+        motion_dir = os.path.join(os.path.dirname(__file__),
+                                  params.HEAD_MOTION_PROFILE_FOLDER)
         path = filedialog.askopenfilename(
             initialdir=motion_dir,
-            title="Select motion data file",
+            title="Select head motion profile",
             filetypes=[("Text/CSV files", "*.txt *.csv"), ("All files", "*.*")],
         )
         if path:
             self._load_file(path)
 
     def _load_file(self, path: str) -> None:
-        """Parse a head motion CSV (columns: time_ms, …, pitch, roll) into playback_data."""
+        """Parse a head motion CSV and store baseline-relative (pitch, roll) samples.
+
+        CSV columns: time (ms), gyro0-2, act0-2, pitch, roll
+
+        The mean pitch/roll over the first HEAD_BASELINE_MS milliseconds is
+        subtracted so that playback always starts from the robot's current pose,
+        regardless of the subject's head angle when recording began.
+        """
         data: list[tuple[int, float, float]] = []
         try:
             with open(path, newline='') as f:
@@ -636,14 +644,29 @@ class ControlWindow:
             self.file_label.config(text="No valid data found", fg=_RED)
             return
 
+        # Normalise timestamps so t=0 is the first sample
         t0 = data[0][0]
-        self.playback_data = [(t - t0, p, r) for t, p, r in data]
+        relative: list[tuple[int, float, float]] = [(t - t0, p, r) for t, p, r in data]
+
+        # Baseline: mean pitch/roll over the first HEAD_BASELINE_MS ms.
+        # Removes the static forehead tilt so the robot starts from its current pose.
+        baseline = [(p, r) for t, p, r in relative if t <= params.HEAD_BASELINE_MS]
+        if not baseline:
+            baseline = [(relative[0][1], relative[0][2])]
+        pitch_ref = sum(p for p, _ in baseline) / len(baseline)
+        roll_ref  = sum(r for _, r in baseline) / len(baseline)
+
+        self.playback_data = [(t, p - pitch_ref, r - roll_ref) for t, p, r in relative]
         self.playback_idx  = 0
         self.is_playing    = False
 
         duration_s = self.playback_data[-1][0] / 1000.0
         self.file_label.config(text=os.path.basename(path), fg=_FG)
-        self.info_label.config(text=f"{len(data)} samples  ·  {duration_s:.1f} s", fg=_DIM)
+        self.info_label.config(
+            text=f"{len(data)} samples  ·  {duration_s:.1f} s  "
+                 f"·  baseline {len(baseline)} samples",
+            fg=_DIM,
+        )
         self.play_btn.config(state=tk.NORMAL)
         self.progress_label.config(text="")
         self.progress_bar['value'] = 0
@@ -653,8 +676,8 @@ class ControlWindow:
         if not self.playback_data or not self.robot:
             return
         self.playback_idx   = 0
-        self.prev_pitch     = self.playback_data[0][1]
-        self.prev_roll      = self.playback_data[0][2]
+        self.prev_pitch     = 0.0   # data is baseline-relative; starts at 0
+        self.prev_roll      = 0.0
         self.playback_start = time.monotonic()
         self.is_playing     = True
         self.play_btn.config(state=tk.DISABLED)
@@ -897,7 +920,13 @@ class ControlWindow:
                 self._saccadic_btn.config(state=tk.NORMAL)
 
     def _tick_head_playback(self) -> None:
-        """Advance head motion playback by dispatching all due frames this tick."""
+        """Advance head motion playback by dispatching all due frames this tick.
+
+        Coordinate mapping (IMU frame → robot TRF):
+          pitch (sagittal tilt, extension+/flexion−) → UX  scaled by HEAD_PITCH_SIGN
+          roll  (frontal tilt,  right tilt+/left−)   → UZ  scaled by HEAD_ROLL_SIGN
+          yaw   (axial rotation, not in data)         → UY  always 0
+        """
         if not self.is_playing or not self.robot:
             return
 
@@ -915,7 +944,9 @@ class ControlWindow:
             # Skip outlier jumps (sensor glitches / discontinuities > 5°)
             if abs(d_pitch) < 5.0 and abs(d_roll) < 5.0:
                 if abs(d_pitch) > 0.01 or abs(d_roll) > 0.01:
-                    self.robot.MoveLinRelTrf(0, 0, 0, d_pitch, 0, d_roll)
+                    dux = params.HEAD_PITCH_SIGN * d_pitch
+                    duz = params.HEAD_ROLL_SIGN  * d_roll
+                    self.robot.MoveLinRelTrf(0, 0, 0, dux, 0, duz)
 
             self.prev_pitch = pitch
             self.prev_roll  = roll
