@@ -4,7 +4,6 @@ Provides a dark-themed GUI with:
   - Gimbal speed tuning and WASD key-binding reference
   - Eye motion profile playback (Bell's reflex, saccadic) with auto-rewind
   - Head motion playback from IMU CSV files
-  - Joint jog sliders (J1–J6) for the Meca500
   - TRF Cartesian jog buttons (X/Y/Z translation and UX/UY/UZ rotation)
 """
 
@@ -12,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import glob
+import math
 import os
 import time
 import tkinter as tk
@@ -100,21 +100,19 @@ class ControlWindow:
         self._eye_progress_bar: Optional[ttk.Progressbar]  = None
         self._eye_progress_lbl: Optional[tk.Label]         = None
 
+        # Head motion preset UI widgets (populated in _build_motion_playback_card)
+        self._rest_btn: Optional[tk.Button] = None
+
         # Gimbal reset state
         self._gimbal_resetting = False
 
         # Head motion playback state
-        self.playback_data:  list[tuple[int, float, float]] = []
-        self.playback_idx    = 0
+        self._head_playback_data:  list[tuple[float, float, float]] = []
+        self._head_play_idx    = 0
         self.is_playing      = False
         self.playback_start  = 0.0
         self.prev_pitch      = 0.0
         self.prev_roll       = 0.0
-
-        # Joint jog state
-        self.joint_vars:   list[tk.DoubleVar] = []
-        self.jog_vel_var:  Optional[tk.DoubleVar] = None
-        self._jog_after_id = None
 
         # TRF Cartesian jog state
         self.trf_lin_step_var: Optional[tk.DoubleVar] = None
@@ -224,7 +222,7 @@ class ControlWindow:
     def _build_ui(self) -> None:
         """Construct the full window layout."""
         self._configure_window()
-        left, right, far_right = self._build_body_columns()
+        left, right = self._build_body_columns()
 
         if self.use_eye:
             self._build_gimbal_speed_card(left)
@@ -236,8 +234,7 @@ class ControlWindow:
 
         if self.use_head:
             self._build_motion_playback_card(left)
-            self._build_joint_jog_card(right)
-            self._build_trf_jog_card(far_right)
+            self._build_trf_jog_card(right)
 
         tk.Frame(self.root, bg=_BG, height=8).pack()
 
@@ -259,19 +256,18 @@ class ControlWindow:
             parts.append("Eye  (Dynamixel)")
         self._lbl(header, "  +  ".join(parts), 9, color='#ddd6fe').pack(pady=(2, 0))
 
-    def _build_body_columns(self) -> tuple[tk.Frame, tk.Frame, tk.Frame]:
-        """Pack the three-column body frame and return (left, right, far_right)."""
+    def _build_body_columns(self) -> tuple[tk.Frame, tk.Frame]:
+        """Pack the two-column body frame and return (left, right)."""
         body = tk.Frame(self.root, bg=_BG)
         body.pack(fill='both', expand=True)
 
-        left      = tk.Frame(body, bg=_BG)
-        right     = tk.Frame(body, bg=_BG)
-        far_right = tk.Frame(body, bg=_BG)
+        left  = tk.Frame(body, bg=_BG)
+        right = tk.Frame(body, bg=_BG)
 
-        for col in (left, right, far_right):
+        for col in (left, right):
             col.pack(side=tk.LEFT, fill='both', expand=True)
 
-        return left, right, far_right
+        return left, right
 
     def _build_gimbal_speed_card(self, parent: tk.Frame) -> None:
         """Gimbal speed card: step-size slider + live velocity readout."""
@@ -356,11 +352,25 @@ class ControlWindow:
         self._eye_progress_lbl.pack(anchor='w')
 
     def _build_motion_playback_card(self, parent: tk.Frame) -> None:
-        """Head motion playback card: file browser, play/stop, and progress bar."""
+        """Head motion playback card: presets, file browser, play/stop, and progress bar."""
         card = self._card(parent)
         self._lbl(card, "Motion Playback", 10, bold=True).pack(anchor='w')
         self._sep(card)
 
+        # ── Preset buttons ─────────────────────
+        preset_row = tk.Frame(card, bg=_CARD)
+        preset_row.pack(fill='x', pady=(0, 6))
+        self._lbl(preset_row, "Preset", 9, color=_DIM).pack(side=tk.LEFT, padx=(0, 8))
+        self._rest_btn = self._btn(
+            preset_row, "Rest",
+            lambda: self._play_preset(params.HEAD_REST_PROFILE),
+            color=_BTN_PURPLE, fg='black', width=8,
+        )
+        self._rest_btn.pack(side=tk.LEFT)
+
+        self._sep(card)
+
+        # ── Manual file picker ──────────────────
         file_row = tk.Frame(card, bg=_CARD)
         file_row.pack(fill='x', pady=(0, 6))
         self.file_label = self._lbl(file_row, "No file loaded", 9, color=_DIM)
@@ -370,6 +380,7 @@ class ControlWindow:
         self.info_label = self._lbl(card, "", 9, color=_DIM)
         self.info_label.pack(anchor='w', pady=(0, 6))
 
+        # ── Playback controls ───────────────────
         btn_row = tk.Frame(card, bg=_CARD)
         btn_row.pack(fill='x', pady=(0, 6))
 
@@ -397,34 +408,6 @@ class ControlWindow:
 
         self.progress_label = self._lbl(card, "", 9, color=_DIM)
         self.progress_label.pack(anchor='w')
-
-    def _build_joint_jog_card(self, parent: tk.Frame) -> None:
-        """Joint jog card: velocity slider and per-axis position sliders (J1–J6)."""
-        card = self._card(parent, fill='both', expand=True)
-        self._lbl(card, "Joint Jog", 10, bold=True).pack(anchor='w')
-        self._sep(card)
-
-        vel_row = tk.Frame(card, bg=_CARD)
-        vel_row.pack(fill='x', pady=(0, 4))
-        self._lbl(vel_row, "Velocity", 9, color=_DIM).pack(side=tk.LEFT, padx=(0, 8))
-        self.jog_vel_var = tk.DoubleVar(value=params.MAX_JOINT_VEL_PERCENTAGE)
-        self._scale(vel_row, from_=params.JOINT_VEL_MIN, to=params.JOINT_VEL_MAX,
-                    resolution=0.1, orient=tk.HORIZONTAL,
-                    variable=self.jog_vel_var, length=160).pack(side=tk.LEFT)
-        self._lbl(vel_row, "%", 9, color=_DIM).pack(side=tk.LEFT, padx=4)
-        self.jog_vel_var.trace_add('write', lambda *_: self._apply_vel_limit())
-
-        for i, (label, init_angle) in enumerate(
-                zip(['J1', 'J2', 'J3', 'J4', 'J5', 'J6'], params.ROBOT_HEAD_INIT_POSE)):
-            lo, hi = params.MECA500_JOINT_LIMITS[i]
-            row = tk.Frame(card, bg=_CARD)
-            row.pack(fill='x', pady=3)
-            self._lbl(row, label, 9, bold=True, color=_ACCT).pack(side=tk.LEFT, padx=(0, 6))
-            var = tk.DoubleVar(value=init_angle)
-            self._scale(row, from_=lo, to=hi, resolution=0.5,
-                        orient=tk.HORIZONTAL, variable=var, length=200).pack(side=tk.LEFT)
-            var.trace_add('write', lambda *_: self._schedule_jog())
-            self.joint_vars.append(var)
 
     def _build_trf_jog_card(self, parent: tk.Frame) -> None:
         """TRF Cartesian jog card: step-size inputs, hold-to-jog buttons, home controls."""
@@ -606,6 +589,17 @@ class ControlWindow:
     #  Head motion playback
     # ─────────────────────────────────────────
 
+    def _play_preset(self, keyword: str) -> None:
+        """Find, load, and immediately start the most-recent profile matching *keyword*."""
+        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        matches = glob.glob(os.path.join(folder, f'*{keyword}*.txt'))
+        matches += glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
+        if not matches:
+            self.file_label.config(text=f"No '{keyword}' profile found", fg=_RED)
+            return
+        self._load_file(max(matches))   # lexicographic max → most-recent date prefix
+        self._start_playback()
+
     def _browse_file(self) -> None:
         """Open a file-chooser dialog and load the selected head motion CSV."""
         motion_dir = os.path.join(os.path.dirname(__file__),
@@ -619,52 +613,111 @@ class ControlWindow:
             self._load_file(path)
 
     def _load_file(self, path: str) -> None:
-        """Parse a head motion CSV and store baseline-relative (pitch, roll) samples.
+        """Parse a head motion CSV and compute orientation via complementary filter.
 
-        CSV columns: time (ms), gyro0-2, act0-2, pitch, roll
+        CSV columns: time (sample count), gyro0, gyro1, gyro2 (°/s), act0, act1, act2 (g)
 
-        The mean pitch/roll over the first HEAD_BASELINE_MS milliseconds is
-        subtracted so that playback always starts from the robot's current pose,
-        regardless of the subject's head angle when recording began.
+        IMU frame (+X=inferior, +Y=nasal, +Z=out-of-face):
+          pitch — rotation about Y=nasal  (nodding);    driven by gyro1
+          roll  — rotation about X=inferior (lat tilt); driven by gyro0
+
+        Timestamps are sample indices; multiplying by 0.001 converts them to
+        seconds (1 kHz → 1 sample per ms → 0.001 s per count).  The initial
+        sample defines t=0 s and 0°/0° orientation.
+
+        Fusion pipeline
+        ───────────────
+        1. Accelerometer IIR low-pass filter (HEAD_ACCEL_LPF_BETA, ≈8 Hz cutoff):
+               ax_f[n] = β·ax_f[n-1] + (1−β)·ax[n]
+        2. Accel-derived absolute tilt from gravity:
+               pitch_accel = atan2(ax_f, az_f)   (rotation about Y=nasal)
+               roll_accel  = atan2(−ay_f, az_f)  (rotation about X=inferior)
+           Reference angles from sample 0 are subtracted so pose starts at 0°.
+        3. Gyro integration using actual dt from timestamps (handles gaps):
+               pitch_gyro = pitch[n-1] + gyro1·dt
+               roll_gyro  = roll[n-1]  + gyro0·dt
+        4. Complementary filter (HEAD_CF_ALPHA):
+               pitch[n] = α·pitch_gyro + (1−α)·pitch_accel_relative
+               roll[n]  = α·roll_gyro  + (1−α)·roll_accel_relative
         """
-        data: list[tuple[int, float, float]] = []
+        raw: list[tuple[float, float, float, float, float, float, float]] = []
         try:
             with open(path, newline='') as f:
                 reader = csv.reader(f)
-                next(reader)   # skip header row
+                next(reader)
                 for row in reader:
-                    if len(row) < 9:
+                    if len(row) < 7:
                         continue
-                    data.append((int(float(row[0])), float(row[7]), float(row[8])))
+                    raw.append((
+                        float(row[0]),           # sample count
+                        float(row[1]),           # gyro0  °/s  about X=inferior
+                        float(row[2]),           # gyro1  °/s  about Y=nasal
+                        float(row[3]),           # gyro2  °/s  about Z=out-of-face (unused)
+                        float(row[4]),           # act0   g    X=inferior
+                        float(row[5]),           # act1   g    Y=nasal
+                        float(row[6]),           # act2   g    Z=out-of-face
+                    ))
         except Exception as exc:
             self.file_label.config(text=f"Error loading file: {exc}", fg=_RED)
             return
 
-        if not data:
+        if not raw:
             self.file_label.config(text="No valid data found", fg=_RED)
             return
 
-        # Normalise timestamps so t=0 is the first sample
-        t0 = data[0][0]
-        relative: list[tuple[int, float, float]] = [(t - t0, p, r) for t, p, r in data]
+        alpha = params.HEAD_CF_ALPHA        # complementary filter gyro weight
+        beta  = params.HEAD_ACCEL_LPF_BETA  # accel IIR low-pass weight
 
-        # Baseline: mean pitch/roll over the first HEAD_BASELINE_MS ms.
-        # Removes the static forehead tilt so the robot starts from its current pose.
-        baseline = [(p, r) for t, p, r in relative if t <= params.HEAD_BASELINE_MS]
-        if not baseline:
-            baseline = [(relative[0][1], relative[0][2])]
-        pitch_ref = sum(p for p, _ in baseline) / len(baseline)
-        roll_ref  = sum(r for _, r in baseline) / len(baseline)
+        # Convert sample counter to seconds; subtract first sample to normalise to 0
+        t0_s = raw[0][0] * 0.001
 
-        self.playback_data = [(t, p - pitch_ref, r - roll_ref) for t, p, r in relative]
-        self.playback_idx  = 0
+        # Initialise filter state from first sample
+        _, _, _, _, a0_0, a1_0, a2_0 = raw[0]
+        ax_f, ay_f, az_f = a0_0, a1_0, a2_0   # IIR state (no history yet)
+
+        az_safe   = az_f if abs(az_f) > 1e-6 else 1e-6
+        pitch_ref = math.atan2(ax_f,  az_safe)   # absolute accel pitch at t=0
+        roll_ref  = math.atan2(-ay_f, az_safe)   # absolute accel roll  at t=0
+
+        pitch_deg = 0.0
+        roll_deg  = 0.0
+        t_prev_s  = t0_s
+
+        result: list[tuple[float, float, float]] = [(0.0, 0.0, 0.0)]
+
+        for sample_count, g0, g1, _g2, a0, a1, a2 in raw[1:]:
+            # Step 1 — accelerometer low-pass filter
+            ax_f = beta * ax_f + (1.0 - beta) * a0
+            ay_f = beta * ay_f + (1.0 - beta) * a1
+            az_f = beta * az_f + (1.0 - beta) * a2
+
+            # Step 2 — accel tilt relative to initial pose
+            az_safe     = az_f if abs(az_f) > 1e-6 else 1e-6
+            pitch_accel = math.degrees(math.atan2(ax_f,  az_safe) - pitch_ref)
+            roll_accel  = math.degrees(math.atan2(-ay_f, az_safe) - roll_ref)
+
+            # Step 3 — gyro integration with actual dt
+            t_s   = sample_count * 0.001 - t0_s
+            dt    = max(t_s - t_prev_s, 1e-6)   # guard against duplicate timestamps
+            pitch_gyro = pitch_deg + g1 * dt     # gyro1 → pitch about Y=nasal
+            roll_gyro  = roll_deg  + g0 * dt     # gyro0 → roll  about X=inferior
+
+            # Step 4 — complementary filter
+            pitch_deg = alpha * pitch_gyro + (1.0 - alpha) * pitch_accel
+            roll_deg  = alpha * roll_gyro  + (1.0 - alpha) * roll_accel
+
+            result.append((t_s, pitch_deg, roll_deg))
+            t_prev_s = t_s
+
+        self._head_playback_data = result
+        self._head_play_idx  = 0
         self.is_playing    = False
 
-        duration_s = self.playback_data[-1][0] / 1000.0
+        duration_s = result[-1][0]
         self.file_label.config(text=os.path.basename(path), fg=_FG)
         self.info_label.config(
-            text=f"{len(data)} samples  ·  {duration_s:.1f} s  "
-                 f"·  baseline {len(baseline)} samples",
+            text=(f"{len(result)} samples  ·  {duration_s:.1f} s  "
+                  f"·  CF α={alpha}  LPF β={beta}"),
             fg=_DIM,
         )
         self.play_btn.config(state=tk.NORMAL)
@@ -673,27 +726,39 @@ class ControlWindow:
 
     def _start_playback(self) -> None:
         """Begin replaying the loaded head motion file."""
-        if not self.playback_data or not self.robot:
+        if not self._head_playback_data or not self.robot:
             return
-        self.playback_idx   = 0
+        self._head_play_idx   = 0
         self.prev_pitch     = 0.0   # data is baseline-relative; starts at 0
         self.prev_roll      = 0.0
         self.playback_start = time.monotonic()
         self.is_playing     = True
+        if self._rest_btn:
+            self._rest_btn.config(state=tk.DISABLED)
         self.play_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         self.progress_bar['value'] = 0
         self.progress_label.config(text="Playing…")
+        print(f"[playback] robot={self.robot}, samples={len(self._head_playback_data)}, use_head={self.use_head}")
+
 
     def _stop_playback(self) -> None:
-        """Halt head motion playback and clear the robot's motion queue."""
+        """Halt head motion playback and clear the robot's motion queue.
+
+        ClearMotion() empties the queue but also pauses it; ResumeMotion()
+        re-opens it so subsequent commands (jog buttons, next playback) are
+        accepted without needing a full reconnect.
+        """
         self.is_playing = False
         if self.robot:
             try:
                 self.robot.ClearMotion()
+                self.robot.ResumeMotion()
             except Exception:
                 pass
-        self.play_btn.config(state=tk.NORMAL if self.playback_data else tk.DISABLED)
+        if self._rest_btn:
+            self._rest_btn.config(state=tk.NORMAL)
+        self.play_btn.config(state=tk.NORMAL if self._head_playback_data else tk.DISABLED)
         self.stop_btn.config(state=tk.DISABLED)
         self.progress_label.config(text="Stopped")
 
@@ -760,36 +825,6 @@ class ControlWindow:
     #  Joint jog
     # ─────────────────────────────────────────
 
-    def _apply_vel_limit(self) -> None:
-        """Push the current velocity slider value to the robot."""
-        if not self.robot or not self.jog_vel_var:
-            return
-        try:
-            self.robot.SetJointVelLimit(self.jog_vel_var.get())
-        except Exception:
-            pass
-
-    def _schedule_jog(self) -> None:
-        """Debounce slider changes: send the joint move 300 ms after the last change."""
-        if self._jog_after_id:
-            self.root.after_cancel(self._jog_after_id)
-        self._jog_after_id = self.root.after(300, self._jog_joints)
-
-    def _jog_joints(self) -> None:
-        """Send a MoveJoints command for the current slider angles."""
-        if not self.robot or not self.joint_vars:
-            return
-        angles = [v.get() for v in self.joint_vars]
-        try:
-            self.robot.ClearMotion()
-        except Exception as exc:
-            print(f"[jog] ClearMotion failed: {exc}")
-        try:
-            self.robot.SetJointVelLimit(self.jog_vel_var.get())
-            self.robot.MoveJoints(*angles)
-            print(f"[jog] MoveJoints → {angles}")
-        except Exception as exc:
-            print(f"[jog] MoveJoints failed: {exc}")
 
     # ─────────────────────────────────────────
     #  Robot error recovery
@@ -920,7 +955,13 @@ class ControlWindow:
                 self._saccadic_btn.config(state=tk.NORMAL)
 
     def _tick_head_playback(self) -> None:
-        """Advance head motion playback by dispatching all due frames this tick.
+        """Advance head motion playback by one 50 Hz tick.
+
+        The IMU hardware rate is 1 kHz (1 ms/sample). At the 50 Hz tick rate,
+        each tick covers ~20 samples. Rather than sending one MoveLinRelTrf per
+        sample (which produces 1000 sub-threshold micro-commands per second that the
+        robot silently ignores), all deltas due within this tick are accumulated and
+        sent as a single combined command.
 
         Coordinate mapping (IMU frame → robot TRF):
           pitch (sagittal tilt, extension+/flexion−) → UX  scaled by HEAD_PITCH_SIGN
@@ -930,36 +971,47 @@ class ControlWindow:
         if not self.is_playing or not self.robot:
             return
 
-        elapsed_ms = (time.monotonic() - self.playback_start) * 1000.0
-        n_total    = len(self.playback_data)
+        # Timestamps in playback_data are in seconds (sample_count × 0.001).
+        elapsed_s = time.monotonic() - self.playback_start
+        n_total   = len(self._head_playback_data)
 
-        while self.playback_idx < n_total:
-            t_ms, pitch, roll = self.playback_data[self.playback_idx]
-            if t_ms > elapsed_ms:
+        acc_pitch = 0.0
+        acc_roll  = 0.0
+
+        while self._head_play_idx < n_total:
+            t_s, pitch, roll = self._head_playback_data[self._head_play_idx]
+            if t_s > elapsed_s:
                 break
 
             d_pitch = pitch - self.prev_pitch
             d_roll  = roll  - self.prev_roll
 
-            # Skip outlier jumps (sensor glitches / discontinuities > 5°)
+            # Discard outlier jumps (sensor glitches / data gaps > 5°/sample)
             if abs(d_pitch) < 5.0 and abs(d_roll) < 5.0:
-                if abs(d_pitch) > 0.01 or abs(d_roll) > 0.01:
-                    dux = params.HEAD_PITCH_SIGN * d_pitch
-                    duz = params.HEAD_ROLL_SIGN  * d_roll
-                    self.robot.MoveLinRelTrf(0, 0, 0, dux, 0, duz)
+                acc_pitch += d_pitch
+                acc_roll  += d_roll
 
             self.prev_pitch = pitch
             self.prev_roll  = roll
-            self.playback_idx += 1
+            self._head_play_idx += 1
 
-        if self.playback_idx >= n_total:
+        # Send one command per tick with the accumulated movement
+        if abs(acc_pitch) > 0.01 or abs(acc_roll) > 0.01:
+            dux = params.HEAD_PITCH_SIGN * acc_pitch
+            duz = params.HEAD_ROLL_SIGN  * acc_roll
+            try:
+                self.robot.MoveLinRelTrf(0, 0, 0, dux, 0, duz)
+            except Exception as exc:
+                print(f"[head playback] {exc}")
+
+        if self._head_play_idx >= n_total:
             self._stop_playback()
             self.progress_bar['value'] = 100
             self.progress_label.config(text="Done")
         else:
-            pct = int(100 * self.playback_idx / n_total)
+            pct = int(100 * self._head_play_idx / n_total)
             self.progress_bar['value'] = pct
-            self.progress_label.config(text=f"{elapsed_ms / 1000:.1f} s  ({pct}%)")
+            self.progress_label.config(text=f"{elapsed_s:.1f} s  ({pct}%)")
 
     # ─────────────────────────────────────────
     #  Shutdown

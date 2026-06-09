@@ -93,8 +93,15 @@ def setup_motor(
     packet: PacketHandler,
     motor_id: int,
 ) -> None:
-    """Initialize *motor_id* in position-control mode with zero profile velocity."""
+    """Initialize *motor_id* in position-control mode with a physiological force cap.
+
+    Current Limit (addr 38) is an EEPROM register that must be written while
+    torque is disabled.  EYE_CURRENT_LIMIT_COUNTS is derived from the 4 N
+    extraocular-muscle force limit and the gimbal moment arm — see Parameter.py.
+    """
     packet.write1ByteTxRx(port, motor_id, params.ADDR_TORQUE_ENABLE, 0)
+    packet.write2ByteTxRx(port, motor_id, params.ADDR_CURRENT_LIMIT,
+                          params.EYE_CURRENT_LIMIT_COUNTS)
     packet.write1ByteTxRx(port, motor_id, params.ADDR_OPERATING_MODE, params.POSITION_CONTROL_MODE)
     packet.write1ByteTxRx(port, motor_id, params.ADDR_TORQUE_ENABLE, 1)
     packet.write4ByteTxRx(port, motor_id, params.ADDR_PROFILE_VELOCITY, 0)
