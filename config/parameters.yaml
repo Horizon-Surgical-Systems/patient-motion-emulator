@@ -1,0 +1,90 @@
+# Patient Motion Control — runtime parameters
+# Edit this file to tune behavior without recompiling.
+
+# ─── Meca500 Head Robot ───────────────────────────────────────────────────────
+robot:
+  ip_address: "192.168.0.100"
+  # Joint angles J1–J6 in degrees for the initial pose.
+  head_init_pose: [0.0, -30.0, 30.0, 90.0, -90.0, 0.0]
+  # TRF origin offset from flange [X, Y, Z] in mm.
+  head_offset: [0.0, -80.0, 0.0]
+  max_velocity: 20.0             # mm/s — Cartesian TRF move limit
+  max_joint_vel_percentage: 2.0  # % of max joint velocity
+  joint_vel_min: 0.2             # % lower bound for jog UI slider
+  joint_vel_max: 5.0             # % upper bound for jog UI slider
+
+# ─── Dynamixel Eye Gimbal ─────────────────────────────────────────────────────
+gimbal:
+  port: "/dev/ttyACM0"
+  baud_rate: 57600
+  protocol: 2.0
+  motor_id_1: 1        # Superior / Inferior axis
+  motor_id_2: 2        # Temporal  / Nasal axis
+
+  # XL-330 control-table addresses.
+  addr_operating_mode:   11
+  addr_current_limit:    38
+  addr_torque_enable:    64
+  addr_goal_velocity:    104
+  addr_profile_velocity: 112
+  addr_goal_position:    116
+  addr_present_position: 132
+
+  position_control_mode: 3
+  counts_per_rev: 4096           # encoder counts / revolution
+  counts_per_deg: 11.378         # ~4096/360
+
+  eye_center: 2047               # encoder neutral position (~180°)
+  eye_limit_counts: 512          # ±45° from center
+  joint_min_1: 1535
+  joint_max_1: 2559
+  joint_min_2: 1535
+  joint_max_2: 2559
+
+  # Eye force safety limit (see Python Parameter.py for derivation).
+  eye_force_limit_n: 1.0         # N — physiological peak
+  eye_moment_arm_mm: 23.0        # mm — gimbal lever arm
+  eye_current_limit_counts: 18   # derived from force limit and motor constants
+
+# ─── Movement Tuning ──────────────────────────────────────────────────────────
+control:
+  step_size: 44    # encoder counts per loop tick while key held
+  loop_hz: 50      # main control-loop rate (Hz)
+
+# ─── Head IMU Sensor Fusion ───────────────────────────────────────────────────
+imu:
+  head_cf_alpha: 0.98        # complementary filter gyro weight (0–1)
+  head_accel_lpf_beta: 0.97  # accelerometer IIR low-pass weight
+  head_baseline_ms: 500      # ms of initial samples used for reference baseline
+
+# ─── Head Motion Coordinate Mapping ──────────────────────────────────────────
+# +1: IMU +pitch → robot +UX.  -1: invert.
+# +1: IMU +roll  → robot +UZ.  -1: invert.
+head_mapping:
+  pitch_sign: 1.0
+  roll_sign:  1.0
+
+# ─── File Paths ───────────────────────────────────────────────────────────────
+paths:
+  head_motion_profile_folder: "head_motion_profile"
+  eye_motion_profile_folder:  "eye_motion_profile"
+  head_rest_profile:          "rohit_rest"
+  head_cough_profile:         "08_cough"
+  head_clear_throat_profile:  "09_clear_throat"
+
+# ─── UI ───────────────────────────────────────────────────────────────────────
+ui:
+  font_size: 12         # pt — base font size
+  left_col_width: 320   # px — fixed width of left column
+
+  # Colour palette (Catppuccin Mocha)
+  bg_color:     "#1e1e2e"
+  card_color:   "#2a2a3e"
+  accent_color: "#7c6af5"
+  fg_color:     "#cdd6f4"
+  dim_color:    "#6c7086"
+  sep_color:    "#313244"
+  btn_purple:   "#c4bbfc"
+  btn_green:    "#a6e3a1"
+  btn_red:      "#f38ba8"
+  btn_gray:     "#9399b2"
