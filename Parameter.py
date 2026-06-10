@@ -18,7 +18,7 @@ ROBOT_EYE_PUCK_INIT_POSE = [0.0, -20.0, 20.0, 0.0, -90.0, 0.0]
 EYE_PUCK_OFFSET          = [0.0, 0.0, 40.0]   # [X, Y, Z] mm
 
 # Joint angles J1–J6 in degrees
-ROBOT_HEAD_INIT_POSE = [0, -30, 30, 90, -90, -15]
+ROBOT_HEAD_INIT_POSE = [0, -30, 30, 90, -90, 0]
 
 # TRF origin offset from flange [X, Y, Z] in mm
 HEAD_OFFSET = [0.0, -80.0, 0.0]
@@ -172,7 +172,16 @@ HEAD_BASELINE_MS = 500
 HEAD_MOTION_PROFILE_FOLDER = 'head_motion_profile'
 EYE_MOTION_PROFILE_FOLDER  = 'eye_motion_profile'
 
-HEAD_REST_PROFILE = '01_rest_2'
+HEAD_REST_PROFILE         = '01_rest_2'
+HEAD_COUGH_PROFILE        = '08_cough'
+HEAD_CLEAR_THROAT_PROFILE = '09_clear_throat'
+
+# ─────────────────────────────────────────────
+#  UI
+# ─────────────────────────────────────────────
+
+UI_FONT_SIZE        = 12    # pt — base font size for the control window
+UI_LEFT_COL_WIDTH   = 320   # px — fixed width of the left column
 
 # ─────────────────────────────────────────────
 #  Runtime State

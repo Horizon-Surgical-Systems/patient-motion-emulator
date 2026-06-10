@@ -15,8 +15,9 @@ from __future__ import annotations
 import argparse
 import atexit
 import sys
-import tkinter as tk
 from typing import Optional
+
+from PyQt6.QtWidgets import QApplication
 
 import mecademicpy.robot as mdr
 from dynamixel_sdk import PacketHandler, PortHandler
@@ -175,13 +176,13 @@ def main() -> None:
     atexit.register(enable_echo)
     disable_echo()
 
-    # tk.Tk() must be created before starting pynput on macOS (Cocoa init order).
-    root = tk.Tk()
+    app = QApplication(sys.argv)
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.start()
 
-    ControlWindow(root, use_head, use_eye, robot, port_handler, packet_handler, listener)
-    root.mainloop()
+    window = ControlWindow(use_head, use_eye, robot, port_handler, packet_handler, listener)
+    window.show()
+    sys.exit(app.exec())
 
     print("Shutting down.")
 

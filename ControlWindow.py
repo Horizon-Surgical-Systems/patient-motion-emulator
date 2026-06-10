@@ -1,4 +1,4 @@
-"""Tkinter control window for patient motion interface.
+"""PyQt6 control window for patient motion interface.
 
 Provides a dark-themed GUI with:
   - Gimbal speed tuning and WASD key-binding reference
@@ -13,10 +13,16 @@ import csv
 import glob
 import math
 import os
+import threading
 import time
-import tkinter as tk
-from tkinter import filedialog, ttk
 from typing import Optional
+
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (
+    QApplication, QDoubleSpinBox, QFileDialog, QFrame, QHBoxLayout,
+    QLabel, QMainWindow, QProgressBar, QPushButton, QSizePolicy,
+    QSlider, QVBoxLayout, QWidget,
+)
 
 import Parameter as params
 from Utils import clamp, disable_motor, enable_echo, write_position
@@ -26,29 +32,105 @@ from Utils import clamp, disable_motor, enable_echo, write_position
 #  Dark UI palette (Catppuccin Mocha)
 # ─────────────────────────────────────────────
 
-_BG    = "#1e1e2e"   # window / page background
-_CARD  = "#2a2a3e"   # card surface
-_ACCT  = "#7c6af5"   # accent (labels, progress)
-_FG    = "#cdd6f4"   # primary text
-_DIM   = "#6c7086"   # secondary text / disabled
-_SEP   = "#313244"   # separators / trough
+_BG    = "#1e1e2e"
+_CARD  = "#2a2a3e"
+_ACCT  = "#7c6af5"
+_FG    = "#cdd6f4"
+_DIM   = "#6c7086"
+_SEP   = "#313244"
 
-# Button backgrounds — light enough for black text on macOS native rendering
-_BTN_PURPLE = "#c4bbfc"   # accent actions  (Browse, Set Home)
-_BTN_GREEN  = "#a6e3a1"   # positive actions (Play, Go Home)
-_BTN_RED    = "#f38ba8"   # destructive      (Stop, Reset Error)
-_BTN_GRAY   = "#9399b2"   # hold-to-jog arrows
+_BTN_PURPLE = "#c4bbfc"
+_BTN_GREEN  = "#a6e3a1"
+_BTN_RED    = "#f38ba8"
+_BTN_GRAY   = "#9399b2"
 
-# Semantic aliases kept for progress-label colours
 _GREEN = "#a6e3a1"
 _RED   = "#f38ba8"
 
 
-class ControlWindow:
-    """Main control window, driven by a tkinter event loop.
+def _lighten(hex_color: str, amount: int = 25) -> str:
+    r = min(255, int(hex_color[1:3], 16) + amount)
+    g = min(255, int(hex_color[3:5], 16) + amount)
+    b = min(255, int(hex_color[5:7], 16) + amount)
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
+def _btn_qss(color: str) -> str:
+    """QSS string for a flat button with the given background color."""
+    hover = _lighten(color)
+    fs = params.UI_FONT_SIZE
+    return f"""
+        QPushButton {{
+            background-color: {color};
+            color: black;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-family: Arial;
+            font-size: {fs}pt;
+            font-weight: bold;
+        }}
+        QPushButton:hover {{ background-color: {hover}; }}
+        QPushButton:pressed {{ background-color: {color}; }}
+        QPushButton:disabled {{ background-color: {_DIM}; color: #888888; }}
+    """
+
+
+def _global_qss() -> str:
+    """Build the application stylesheet from the current Parameter values."""
+    fs = params.UI_FONT_SIZE
+    return f"""
+QMainWindow, QWidget {{
+    background-color: {_BG};
+    color: {_FG};
+    font-family: Arial;
+    font-size: {fs}pt;
+}}
+QFrame#card {{
+    background-color: {_BG};
+    border: none;
+}}
+QLabel {{ background: transparent; color: {_FG}; }}
+QProgressBar {{
+    background-color: {_SEP};
+    border: none;
+    border-radius: 3px;
+    max-height: 8px;
+}}
+QProgressBar::chunk {{ background-color: {_ACCT}; border-radius: 3px; }}
+QSlider::groove:horizontal {{
+    background: {_SEP};
+    height: 4px;
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    background: {_ACCT};
+    width: 12px;
+    height: 12px;
+    margin: -4px 0;
+    border-radius: 6px;
+}}
+QSlider::sub-page:horizontal {{ background: {_ACCT}; border-radius: 2px; }}
+QDoubleSpinBox {{
+    background-color: {_BG};
+    color: {_FG};
+    border: 1px solid {_SEP};
+    border-radius: 3px;
+    padding: 2px 4px;
+    selection-background-color: {_ACCT};
+}}
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+    background-color: {_SEP};
+    border: none;
+    width: 14px;
+}}
+"""
+
+
+class ControlWindow(QMainWindow):
+    """Main control window using PyQt6.
 
     Args:
-        root: Tk root window.
         use_head: Whether the Meca500 head robot is active.
         use_eye: Whether the Dynamixel eye gimbal is active.
         robot: mecademicpy Robot instance, or None.
@@ -57,12 +139,10 @@ class ControlWindow:
         listener: pynput Listener (stopped on close).
     """
 
-    # Maps TRF axis name → index in the 6-DOF pose vector
     _AXIS_IDX: dict[str, int] = {'x': 0, 'y': 1, 'z': 2, 'ux': 3, 'uy': 4, 'uz': 5}
 
     def __init__(
         self,
-        root: tk.Tk,
         use_head: bool,
         use_eye: bool,
         robot,
@@ -70,7 +150,7 @@ class ControlWindow:
         packet_handler,
         listener,
     ) -> None:
-        self.root           = root
+        super().__init__()
         self.use_head       = use_head
         self.use_eye        = use_eye
         self.robot          = robot
@@ -82,9 +162,6 @@ class ControlWindow:
         self.pos1 = params.EYE_CENTER
         self.pos2 = params.EYE_CENTER
 
-        # Gimbal speed Tk variable (shared between Scale and velocity label)
-        self.step_var = tk.IntVar(value=params.STEP_SIZE)
-
         # Eye motion profile playback state
         self._eye_profile_data: list[tuple[float, int, int]] = []
         self._eye_play_idx     = 0
@@ -95,124 +172,119 @@ class ControlWindow:
         self._eye_rewind_idx   = 0
 
         # Eye profile UI widgets (populated in _build_eye_profiles_card)
-        self._bells_btn:        Optional[tk.Button]        = None
-        self._saccadic_btn:     Optional[tk.Button]        = None
-        self._eye_progress_bar: Optional[ttk.Progressbar]  = None
-        self._eye_progress_lbl: Optional[tk.Label]         = None
+        self._bells_btn:        Optional[QPushButton]  = None
+        self._saccadic_btn:     Optional[QPushButton]  = None
+        self._eye_progress_bar: Optional[QProgressBar] = None
+        self._eye_progress_lbl: Optional[QLabel]       = None
 
-        # Head motion preset UI widgets (populated in _build_motion_playback_card)
-        self._rest_btn: Optional[tk.Button] = None
+        # Head motion preset UI widgets
+        self._preset_btns: list[QPushButton] = []
 
         # Gimbal reset state
         self._gimbal_resetting = False
 
         # Head motion playback state
-        self._head_playback_data:  list[tuple[float, float, float]] = []
-        self._head_play_idx    = 0
+        self._head_playback_data: list[tuple[float, float, float]] = []
+        self._head_play_idx  = 0
         self.is_playing      = False
         self.playback_start  = 0.0
         self.prev_pitch      = 0.0
         self.prev_roll       = 0.0
+        self._head_rewinding      = False
+        self._head_return_done    = False
+
+        # Head playback UI widgets (populated in _build_motion_playback_card)
+        self.file_label:      Optional[QLabel]       = None
+        self.info_label:      Optional[QLabel]       = None
+        self.play_btn:        Optional[QPushButton]  = None
+        self.stop_btn:        Optional[QPushButton]  = None
+        self.progress_bar:    Optional[QProgressBar] = None
+        self.progress_label:  Optional[QLabel]       = None
+
+        # Gimbal speed UI
+        self._gimbal_speed_slider: Optional[QSlider] = None
+        self._vel_label:           Optional[QLabel]  = None
 
         # TRF Cartesian jog state
-        self.trf_lin_step_var: Optional[tk.DoubleVar] = None
-        self.trf_ang_step_var: Optional[tk.DoubleVar] = None
-        self._trf_after_id     = None
-        self._cart_pos         = [0.0] * 6   # cumulative offset from init pose
-        self._home_cart_offset = [0.0] * 6   # saved home offset
+        self._trf_lin_step:    Optional[QDoubleSpinBox] = None
+        self._trf_ang_step:    Optional[QDoubleSpinBox] = None
+        self._trf_jog_axis     = 'x'
+        self._trf_jog_sign     = 1.0
+        self._cart_pos         = [0.0] * 6
+        self._home_cart_offset = [0.0] * 6
+        self._head_home_joints: list[float] = list(params.ROBOT_HEAD_INIT_POSE)
+        self._pose_label:      Optional[QLabel] = None
+
+        self._trf_jog_timer = QTimer(self)
+        self._trf_jog_timer.timeout.connect(self._repeat_trf_jog)
 
         self._build_ui()
-        root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self._tick()
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(int(1000 / params.LOOP_HZ))
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
 
     # ─────────────────────────────────────────
     #  Widget factory helpers
     # ─────────────────────────────────────────
 
-    @staticmethod
-    def _lighten(hex_color: str, amount: int = 25) -> str:
-        """Return *hex_color* brightened by *amount* per channel (capped at 255)."""
-        r = min(255, int(hex_color[1:3], 16) + amount)
-        g = min(255, int(hex_color[3:5], 16) + amount)
-        b = min(255, int(hex_color[5:7], 16) + amount)
-        return f'#{r:02x}{g:02x}{b:02x}'
-
-    def _card(self, parent: tk.Frame, fill: str = 'x', expand: bool = False) -> tk.Frame:
-        """Create and pack a rounded card frame inside *parent*."""
-        frame = tk.Frame(
-            parent, bg=_CARD, padx=14, pady=10,
-            highlightbackground=_SEP, highlightthickness=1,
-        )
-        frame.pack(fill=fill, expand=expand, padx=12, pady=4)
-        return frame
+    def _make_card(self, parent: QWidget) -> tuple[QFrame, QVBoxLayout]:
+        """Create a styled card QFrame, add it to parent's layout, return (frame, layout)."""
+        card = QFrame()
+        card.setObjectName("card")
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(14, 10, 14, 10)
+        inner.setSpacing(4)
+        parent.layout().addWidget(card)
+        return card, inner
 
     def _lbl(
         self,
-        parent: tk.Widget,
         text: str,
-        size: int = 9,
+        size: Optional[int] = None,
         bold: bool = False,
         color: Optional[str] = None,
-    ) -> tk.Label:
-        """Create (but do not pack) a styled Label."""
-        font = ('Arial', size, 'bold') if bold else ('Arial', size)
-        return tk.Label(parent, text=text, bg=parent['bg'], fg=color or _FG, font=font)
+    ) -> QLabel:
+        """Create (but do not add) a styled QLabel."""
+        fs = size if size is not None else params.UI_FONT_SIZE
+        lbl = QLabel(text)
+        weight = "bold" if bold else "normal"
+        c = color or _FG
+        lbl.setStyleSheet(
+            f"color: {c}; font-size: {fs}pt; font-weight: {weight}; background: transparent;"
+        )
+        return lbl
 
-    def _sep(self, parent: tk.Frame) -> None:
-        """Pack a 1-pixel horizontal separator into *parent*."""
-        tk.Frame(parent, bg=_SEP, height=1).pack(fill='x', pady=(4, 6))
+    def _sep(self, layout: QVBoxLayout) -> None:
+        """Add a small vertical gap between card sections."""
+        spacer = QWidget()
+        spacer.setFixedHeight(6)
+        layout.addWidget(spacer)
 
     def _btn(
         self,
-        parent: tk.Widget,
         text: str,
         command,
         color: str = _BTN_PURPLE,
-        fg: str = 'black',
-        width: int = 10,
-    ) -> tk.Button:
-        """Create (but do not pack) a styled flat Button."""
-        btn = tk.Button(
-            parent, text=text, command=command,
-            bg=color, fg=fg,
-            activebackground=self._lighten(color), activeforeground=fg,
-            disabledforeground='#888888',
-            font=('Arial', 9, 'bold'),
-            relief='flat', bd=0, padx=10, pady=5, cursor='hand2', width=width,
-        )
-        btn.bind('<Enter>', lambda _, c=color: btn.config(bg=self._lighten(c)))
-        btn.bind('<Leave>', lambda _, c=color: btn.config(bg=c))
+        min_width: int = 80,
+    ) -> QPushButton:
+        """Create (but do not add) a styled QPushButton."""
+        btn = QPushButton(text)
+        btn.setStyleSheet(_btn_qss(color))
+        btn.setMinimumWidth(min_width)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda _=False: command())
         return btn
 
-    def _scale(self, parent: tk.Widget, **kwargs) -> tk.Scale:
-        """Create (but do not pack) a styled Scale widget."""
-        return tk.Scale(
-            parent, bg=_CARD, fg=_FG, troughcolor=_SEP,
-            activebackground=_ACCT, highlightthickness=0, bd=0,
-            **kwargs,
-        )
-
-    def _jog_btn(
-        self,
-        parent: tk.Widget,
-        label: str,
-        axis: str,
-        sign: float,
-        width: int = 3,
-    ) -> tk.Button:
+    def _jog_btn(self, label: str, axis: str, sign: float) -> QPushButton:
         """Create a hold-to-jog TRF button that sends moves while pressed."""
-        btn = tk.Button(
-            parent, text=label, width=width,
-            bg=_BTN_GRAY, fg='black',
-            activebackground=self._lighten(_BTN_GRAY), activeforeground='black',
-            disabledforeground='#888888',
-            font=('Arial', 11, 'bold'),
-            relief='flat', bd=0, padx=6, pady=6, cursor='hand2',
-        )
-        btn.bind('<ButtonPress-1>',   lambda _: self._start_trf_jog(axis, sign))
-        btn.bind('<ButtonRelease-1>', lambda _: self._stop_trf_jog())
-        btn.bind('<Enter>', lambda _: btn.config(bg=self._lighten(_BTN_GRAY)))
-        btn.bind('<Leave>', lambda _: btn.config(bg=_BTN_GRAY))
+        btn = QPushButton(label)
+        btn.setStyleSheet(_btn_qss(_BTN_GRAY))
+        btn.setMinimumWidth(90)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.pressed.connect(lambda: self._start_trf_jog(axis, sign))
+        btn.released.connect(self._stop_trf_jog)
         return btn
 
     # ─────────────────────────────────────────
@@ -220,9 +292,56 @@ class ControlWindow:
     # ─────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        """Construct the full window layout."""
-        self._configure_window()
-        left, right = self._build_body_columns()
+        self.setWindowTitle("Patient Motion Control")
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
+        self.setStyleSheet(_global_qss())
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 8)
+        root_layout.setSpacing(0)
+
+        # Header banner
+        header = QFrame()
+        header.setStyleSheet(f"background-color: {_ACCT}; border: none;")
+        h_layout = QVBoxLayout(header)
+        h_layout.setContentsMargins(12, 12, 12, 12)
+        h_layout.setSpacing(2)
+
+        parts = []
+        if self.use_head:
+            parts.append("Head  (Meca500)")
+        if self.use_eye:
+            parts.append("Eye  (Dynamixel)")
+        sub = QLabel("  +  ".join(parts))
+        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub.setStyleSheet("color: #ddd6fe; font-size: 12pt; background: transparent;")
+        h_layout.addWidget(sub)
+        root_layout.addWidget(header)
+
+        # Two-column body
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+        root_layout.addWidget(body)
+
+        left = QWidget()
+        left.setFixedWidth(params.UI_LEFT_COL_WIDTH)
+        left_layout = QVBoxLayout(left)
+        left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        left_layout.setContentsMargins(4, 4, 4, 4)
+        left_layout.setSpacing(8)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        right_layout.setContentsMargins(4, 4, 4, 4)
+        right_layout.setSpacing(8)
+
+        body_layout.addWidget(left)
+        body_layout.addWidget(right, 1)
 
         if self.use_eye:
             self._build_gimbal_speed_card(left)
@@ -236,68 +355,55 @@ class ControlWindow:
             self._build_motion_playback_card(left)
             self._build_trf_jog_card(right)
 
-        tk.Frame(self.root, bg=_BG, height=8).pack()
+        self.adjustSize()
+        self.setFixedSize(self.sizeHint())
 
-    def _configure_window(self) -> None:
-        """Set window title, background, and header banner."""
-        self.root.title("Patient Motion Control")
-        self.root.configure(bg=_BG)
-        self.root.attributes('-topmost', True)
-        self.root.resizable(False, False)
+    def _build_gimbal_speed_card(self, parent: QWidget) -> None:
+        card, layout = self._make_card(parent)
 
-        header = tk.Frame(self.root, bg=_ACCT, pady=12)
-        header.pack(fill='x')
-        self._lbl(header, "Patient Motion Control", 13, bold=True, color='#ffffff').pack()
+        layout.addWidget(self._lbl("Gimbal Speed", params.UI_FONT_SIZE + 1, bold=True))
+        self._sep(layout)
 
-        parts = []
-        if self.use_head:
-            parts.append("Head  (Meca500)")
-        if self.use_eye:
-            parts.append("Eye  (Dynamixel)")
-        self._lbl(header, "  +  ".join(parts), 9, color='#ddd6fe').pack(pady=(2, 0))
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self._lbl("Step", color=_DIM))
+        row_layout.addStretch()
+        row_layout.addWidget(self._lbl("counts / tick", color=_DIM))
+        layout.addWidget(row)
 
-    def _build_body_columns(self) -> tuple[tk.Frame, tk.Frame]:
-        """Pack the two-column body frame and return (left, right)."""
-        body = tk.Frame(self.root, bg=_BG)
-        body.pack(fill='both', expand=True)
+        slider_row = QWidget()
+        sr_layout = QHBoxLayout(slider_row)
+        sr_layout.setContentsMargins(0, 0, 0, 0)
+        sr_layout.setSpacing(8)
 
-        left  = tk.Frame(body, bg=_BG)
-        right = tk.Frame(body, bg=_BG)
+        self._gimbal_speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self._gimbal_speed_slider.setMinimum(1)
+        self._gimbal_speed_slider.setMaximum(90)
+        self._gimbal_speed_slider.setValue(params.STEP_SIZE)
+        self._gimbal_speed_slider.setMinimumWidth(200)
 
-        for col in (left, right):
-            col.pack(side=tk.LEFT, fill='both', expand=True)
+        self._slider_value_lbl = QLabel(str(params.STEP_SIZE))
+        self._slider_value_lbl.setStyleSheet(f"color: {_FG}; font-size: 9pt; background: transparent; min-width: 24px;")
+        self._slider_value_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        return left, right
+        sr_layout.addWidget(self._gimbal_speed_slider)
+        sr_layout.addWidget(self._slider_value_lbl)
+        layout.addWidget(slider_row)
 
-    def _build_gimbal_speed_card(self, parent: tk.Frame) -> None:
-        """Gimbal speed card: step-size slider + live velocity readout."""
-        card = self._card(parent)
-        self._lbl(card, "Gimbal Speed", 10, bold=True).pack(anchor='w')
-        self._sep(card)
-
-        row = tk.Frame(card, bg=_CARD)
-        row.pack(fill='x')
-        self._lbl(row, "Step", 9, color=_DIM).pack(side=tk.LEFT)
-        self._lbl(row, "counts / tick", 9, color=_DIM).pack(side=tk.RIGHT)
-
-        self._scale(card, from_=1, to=90, orient=tk.HORIZONTAL,
-                    variable=self.step_var, showvalue=True,
-                    length=240).pack(fill='x', pady=(4, 2))
-
-        self.vel_label = self._lbl(card, "", 9, color=_DIM)
-        self.vel_label.pack(anchor='w')
+        self._vel_label = self._lbl("", color=_DIM)
+        layout.addWidget(self._vel_label)
         self._update_vel()
-        self.step_var.trace_add('write', lambda *_: self._update_vel())
+        self._gimbal_speed_slider.valueChanged.connect(self._on_speed_changed)
 
-        self._sep(card)
-        self._btn(card, "Gimbal Reset", self._reset_gimbal,
-                  color=_BTN_GRAY, fg='black', width=14).pack(anchor='w')
+        self._sep(layout)
+        reset_btn = self._btn("Gimbal Reset", self._reset_gimbal, color=_BTN_GRAY, min_width=110)
+        layout.addWidget(reset_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 
-    def _build_key_bindings_card(self, parent: tk.Frame) -> None:
-        """Key bindings reference card."""
-        card = self._card(parent)
-        self._lbl(card, "Key Bindings", 10, bold=True).pack(anchor='w')
-        self._sep(card)
+    def _build_key_bindings_card(self, parent: QWidget) -> None:
+        card, layout = self._make_card(parent)
+        layout.addWidget(self._lbl("Key Bindings", params.UI_FONT_SIZE + 1, bold=True))
+        self._sep(layout)
 
         bindings: list[tuple[str, str, str]] = []
         if self.use_eye:
@@ -308,206 +414,224 @@ class ControlWindow:
         bindings.append(("Q / ESC", "Quit", _RED))
 
         for key_text, action, color in bindings:
-            row = tk.Frame(card, bg=_CARD)
-            row.pack(fill='x', pady=2)
-            self._lbl(row, key_text, 9, bold=True, color=color).pack(side=tk.LEFT)
-            self._lbl(row, action,   9, color=_FG).pack(side=tk.RIGHT)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(self._lbl(key_text, bold=True, color=color))
+            row_layout.addStretch()
+            row_layout.addWidget(self._lbl(action, color=_FG))
+            layout.addWidget(row)
 
-    def _build_eye_profiles_card(self, parent: tk.Frame) -> None:
-        """Eye motion profile card: Bell's reflex and saccadic buttons + progress."""
-        card = self._card(parent)
-        self._lbl(card, "Eye Motion Profiles", 10, bold=True).pack(anchor='w')
-        self._sep(card)
+    def _build_eye_profiles_card(self, parent: QWidget) -> None:
+        card, layout = self._make_card(parent)
+        layout.addWidget(self._lbl("Eye Motion Profiles", params.UI_FONT_SIZE + 1, bold=True))
+        self._sep(layout)
 
-        btn_row = tk.Frame(card, bg=_CARD)
-        btn_row.pack(fill='x', pady=(0, 6))
+        btn_row = QWidget()
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(6)
 
         self._bells_btn = self._btn(
-            btn_row, "Bell's Reflex",
+            "Bell's Reflex",
             lambda: self._start_eye_profile('bells'),
-            color=_BTN_PURPLE, fg='black', width=13,
+            color=_BTN_PURPLE,
         )
-        self._bells_btn.pack(side=tk.LEFT, padx=(0, 6))
-
         self._saccadic_btn = self._btn(
-            btn_row, "Saccadic",
+            "Saccadic",
             lambda: self._start_eye_profile('saccadic'),
-            color=_BTN_PURPLE, fg='black', width=10,
+            color=_BTN_PURPLE,
         )
-        self._saccadic_btn.pack(side=tk.LEFT)
+        self._bells_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._saccadic_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        btn_layout.addWidget(self._bells_btn)
+        btn_layout.addWidget(self._saccadic_btn)
+        layout.addWidget(btn_row)
 
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure(
-            "Eye.Horizontal.TProgressbar",
-            troughcolor=_SEP, background=_ACCT,
-            borderwidth=0, lightcolor=_ACCT, darkcolor=_ACCT,
-        )
-        self._eye_progress_bar = ttk.Progressbar(
-            card, maximum=100, value=0, style="Eye.Horizontal.TProgressbar",
-        )
-        self._eye_progress_bar.pack(fill='x', pady=(0, 4))
+        self._eye_progress_bar = QProgressBar()
+        self._eye_progress_bar.setMaximum(100)
+        self._eye_progress_bar.setValue(0)
+        self._eye_progress_bar.setTextVisible(False)
+        layout.addWidget(self._eye_progress_bar)
 
-        self._eye_progress_lbl = self._lbl(card, "Ready", 9, color=_DIM)
-        self._eye_progress_lbl.pack(anchor='w')
+        self._eye_progress_lbl = self._lbl("Ready", color=_DIM)
+        layout.addWidget(self._eye_progress_lbl)
 
-    def _build_motion_playback_card(self, parent: tk.Frame) -> None:
-        """Head motion playback card: presets, file browser, play/stop, and progress bar."""
-        card = self._card(parent)
-        self._lbl(card, "Motion Playback", 10, bold=True).pack(anchor='w')
-        self._sep(card)
+    def _build_motion_playback_card(self, parent: QWidget) -> None:
+        card, layout = self._make_card(parent)
+        layout.addWidget(self._lbl("Motion Playback", params.UI_FONT_SIZE + 1, bold=True))
+        self._sep(layout)
 
-        # ── Preset buttons ─────────────────────
-        preset_row = tk.Frame(card, bg=_CARD)
-        preset_row.pack(fill='x', pady=(0, 6))
-        self._lbl(preset_row, "Preset", 9, color=_DIM).pack(side=tk.LEFT, padx=(0, 8))
-        self._rest_btn = self._btn(
-            preset_row, "Rest",
-            lambda: self._play_preset(params.HEAD_REST_PROFILE),
-            color=_BTN_PURPLE, fg='black', width=8,
-        )
-        self._rest_btn.pack(side=tk.LEFT)
-
-        self._sep(card)
-
-        # ── Manual file picker ──────────────────
-        file_row = tk.Frame(card, bg=_CARD)
-        file_row.pack(fill='x', pady=(0, 6))
-        self.file_label = self._lbl(file_row, "No file loaded", 9, color=_DIM)
-        self.file_label.pack(side=tk.LEFT, anchor='w')
-        self._btn(file_row, "Browse…", self._browse_file, width=8).pack(side=tk.RIGHT)
-
-        self.info_label = self._lbl(card, "", 9, color=_DIM)
-        self.info_label.pack(anchor='w', pady=(0, 6))
-
-        # ── Playback controls ───────────────────
-        btn_row = tk.Frame(card, bg=_CARD)
-        btn_row.pack(fill='x', pady=(0, 6))
-
-        self.play_btn = self._btn(btn_row, "▶  Play", self._start_playback,
-                                  color=_BTN_GREEN, fg='black', width=9)
-        self.play_btn.config(state=tk.DISABLED)
-        self.play_btn.pack(side=tk.LEFT, padx=(0, 6))
-
-        self.stop_btn = self._btn(btn_row, "■  Stop", self._stop_playback,
-                                  color=_BTN_RED, fg='black', width=9)
-        self.stop_btn.config(state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT)
-
-        style = ttk.Style()
-        style.theme_use('clam')
-        style.configure(
-            "Accent.Horizontal.TProgressbar",
-            troughcolor=_SEP, background=_ACCT,
-            borderwidth=0, lightcolor=_ACCT, darkcolor=_ACCT,
-        )
-        self.progress_bar = ttk.Progressbar(
-            card, maximum=100, value=0, style="Accent.Horizontal.TProgressbar",
-        )
-        self.progress_bar.pack(fill='x', pady=(0, 4))
-
-        self.progress_label = self._lbl(card, "", 9, color=_DIM)
-        self.progress_label.pack(anchor='w')
-
-    def _build_trf_jog_card(self, parent: tk.Frame) -> None:
-        """TRF Cartesian jog card: step-size inputs, hold-to-jog buttons, home controls."""
-        card = self._card(parent, fill='both', expand=True)
-        self._lbl(card, "TRF Cartesian Jog", 10, bold=True).pack(anchor='w')
-        self._sep(card)
-
-        # Step size spinboxes
-        step_grid = tk.Frame(card, bg=_CARD)
-        step_grid.pack(fill='x', pady=(0, 8))
-        self.trf_lin_step_var = tk.DoubleVar(value=1.0)
-        self.trf_ang_step_var = tk.DoubleVar(value=1.0)
-        for label, var, unit in [
-            ("Linear step",  self.trf_lin_step_var, "mm"),
-            ("Angular step", self.trf_ang_step_var, "°"),
+        # Preset buttons
+        layout.addWidget(self._lbl("Preset", color=_DIM))
+        for label, keyword in [
+            ("Rest",         params.HEAD_REST_PROFILE),
+            ("Cough",        params.HEAD_COUGH_PROFILE),
+            ("Clear Throat", params.HEAD_CLEAR_THROAT_PROFILE),
         ]:
-            row = tk.Frame(step_grid, bg=_CARD)
-            row.pack(fill='x', pady=2)
-            self._lbl(row, label, 9, color=_DIM).pack(side=tk.LEFT)
-            tk.Spinbox(row, from_=0.1, to=50.0, increment=0.5,
-                       textvariable=var, width=5, font=('Arial', 9),
-                       bg=_BG, fg=_FG, buttonbackground=_SEP,
-                       insertbackground=_FG, relief='flat').pack(side=tk.RIGHT)
-            self._lbl(row, unit, 9, color=_DIM).pack(side=tk.RIGHT, padx=(0, 4))
+            btn = self._btn(
+                label,
+                lambda kw=keyword: self._play_preset(kw),
+                color=_BTN_PURPLE,
+            )
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            layout.addWidget(btn)
+            self._preset_btns.append(btn)
 
-        # Translation axes: (axis, negative-direction label, positive-direction label)
-        self._lbl(card, "Translation", 9, bold=True, color=_DIM).pack(anchor='w', pady=(4, 2))
+        self._sep(layout)
+
+        # File picker
+        file_row = QWidget()
+        fl_layout = QHBoxLayout(file_row)
+        fl_layout.setContentsMargins(0, 0, 0, 0)
+        self.file_label = self._lbl("No file loaded", color=_DIM)
+        fl_layout.addWidget(self.file_label, 1)
+        browse_btn = self._btn("Browse…", self._browse_file, min_width=70)
+        fl_layout.addWidget(browse_btn)
+        layout.addWidget(file_row)
+
+        self.info_label = self._lbl("", color=_DIM)
+        self.info_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.info_label)
+
+        # Play / Stop
+        ctrl_row = QWidget()
+        ctrl_layout = QHBoxLayout(ctrl_row)
+        ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_layout.setSpacing(6)
+
+        self.play_btn = self._btn("▶  Play", self._start_playback, color=_BTN_GREEN, min_width=80)
+        self.play_btn.setEnabled(False)
+        self.stop_btn = self._btn("■  Stop", self._on_stop_pressed, color=_BTN_RED, min_width=80)
+        self.stop_btn.setEnabled(False)
+        ctrl_layout.addWidget(self.play_btn)
+        ctrl_layout.addWidget(self.stop_btn)
+        ctrl_layout.addStretch()
+        layout.addWidget(ctrl_row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        layout.addWidget(self.progress_bar)
+
+        self.progress_label = self._lbl("", color=_DIM)
+        self.progress_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.progress_label)
+
+    def _build_trf_jog_card(self, parent: QWidget) -> None:
+        card, layout = self._make_card(parent)
+        layout.addWidget(self._lbl("TRF Cartesian Jog", params.UI_FONT_SIZE + 1, bold=True))
+        self._sep(layout)
+
+        go_init_btn = self._btn("Go Init", self._go_init_pose, color=_BTN_PURPLE)
+        go_init_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout.addWidget(go_init_btn)
+        self._sep(layout)
+
+        # Step-size spinboxes
+        for attr, label_text, unit in [
+            ('_trf_lin_step', "Linear step",  "mm"),
+            ('_trf_ang_step', "Angular step", "°"),
+        ]:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 2, 0, 2)
+            row_layout.addWidget(self._lbl(label_text, color=_DIM))
+            row_layout.addStretch()
+            row_layout.addWidget(self._lbl(unit, color=_DIM))
+            spin = QDoubleSpinBox()
+            spin.setRange(0.1, 50.0)
+            spin.setSingleStep(0.5)
+            spin.setValue(1.0)
+            spin.setFixedWidth(65)
+            row_layout.addWidget(spin)
+            setattr(self, attr, spin)
+            layout.addWidget(row)
+
+        # Translation
+        layout.addWidget(self._lbl("Translation", bold=True, color=_DIM))
         for axis, neg_lbl, pos_lbl in [
             ('x', 'Nasal',    'Temporal'),
             ('y', 'Down',     'Up'),
             ('z', 'Inferior', 'Superior'),
         ]:
-            row = tk.Frame(card, bg=_CARD)
-            row.pack(fill='x', pady=3)
-            self._jog_btn(row, f"- {neg_lbl}", axis, -1, width=10).pack(side=tk.LEFT)
-            self._lbl(row, axis.upper(), 10, bold=True, color=_ACCT).pack(
-                side=tk.LEFT, expand=True)
-            self._jog_btn(row, f"{pos_lbl} +", axis, +1, width=10).pack(side=tk.RIGHT)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 3, 0, 3)
+            row_layout.addWidget(self._jog_btn(f"← {neg_lbl}", axis, -1))
+            row_layout.addStretch()
+            axis_lbl = self._lbl(axis.upper(), params.UI_FONT_SIZE + 1, bold=True, color=_ACCT)
+            axis_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            row_layout.addWidget(axis_lbl)
+            row_layout.addStretch()
+            row_layout.addWidget(self._jog_btn(f"{pos_lbl} →", axis, +1))
+            layout.addWidget(row)
 
-        # Rotation axes
-        self._lbl(card, "Rotation", 9, bold=True, color=_DIM).pack(anchor='w', pady=(8, 2))
+        # Rotation
+        layout.addWidget(self._lbl("Rotation", bold=True, color=_DIM))
         for axis, neg_lbl, pos_lbl in [
             ('ux', 'Inferior', 'Superior'),
             ('uy', 'Left',     'Right'),
             ('uz', 'Temporal', 'Nasal'),
         ]:
-            row = tk.Frame(card, bg=_CARD)
-            row.pack(fill='x', pady=3)
-            self._jog_btn(row, f"- {neg_lbl}", axis, -1, width=10).pack(side=tk.LEFT)
-            self._lbl(row, axis, 10, bold=True, color=_ACCT).pack(side=tk.LEFT, expand=True)
-            self._jog_btn(row, f"{pos_lbl} +", axis, +1, width=10).pack(side=tk.RIGHT)
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 3, 0, 3)
+            row_layout.addWidget(self._jog_btn(f"← {neg_lbl}", axis, -1))
+            row_layout.addStretch()
+            axis_lbl = self._lbl(axis, params.UI_FONT_SIZE + 1, bold=True, color=_ACCT)
+            axis_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            row_layout.addWidget(axis_lbl)
+            row_layout.addStretch()
+            row_layout.addWidget(self._jog_btn(f"{pos_lbl} →", axis, +1))
+            layout.addWidget(row)
 
-        tk.Frame(card, bg=_SEP, height=1).pack(fill='x', pady=(10, 6))
+        self._sep(layout)
 
-        home_row = tk.Frame(card, bg=_CARD)
-        home_row.pack(fill='x', pady=(0, 4))
-        self._btn(home_row, "Set Home", self._set_trf_home,
-                  color=_BTN_PURPLE, fg='black', width=10).pack(side=tk.LEFT, padx=(0, 6))
-        self._btn(home_row, "Go Home", self._go_trf_home,
-                  color=_BTN_GREEN, fg='black', width=10).pack(side=tk.LEFT)
+        for text, cmd, color in [
+            ("Set Home",    self._set_trf_home,      _BTN_PURPLE),
+            ("Go Home",     self._go_trf_home,       _BTN_GREEN),
+            ("Reset Error", self._reset_robot_error, _BTN_RED),
+            ("Get Robot Pose", self._get_robot_pose, _BTN_GRAY),
+        ]:
+            btn = self._btn(text, cmd, color=color, min_width=90)
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            layout.addWidget(btn)
 
-        self._btn(card, "Reset Error", self._reset_robot_error,
-                  color=_BTN_RED, fg='black', width=12).pack(anchor='w')
+        self._pose_label = self._lbl("", color=_DIM)
+        self._pose_label.setWordWrap(True)
+        self._pose_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self._pose_label)
 
     # ─────────────────────────────────────────
     #  Gimbal speed display
     # ─────────────────────────────────────────
 
+    def _on_speed_changed(self, value: int) -> None:
+        if self._slider_value_lbl:
+            self._slider_value_lbl.setText(str(value))
+        self._update_vel()
+
     def _update_vel(self) -> None:
-        """Recompute and display the velocity corresponding to the current step size."""
-        if not hasattr(self, 'vel_label'):
+        if self._vel_label is None or self._gimbal_speed_slider is None:
             return
-        try:
-            step = self.step_var.get()
-        except tk.TclError:
-            return
+        step = self._gimbal_speed_slider.value()
         counts_per_sec = step * params.LOOP_HZ
         deg_per_sec    = counts_per_sec * 360 / params.COUNTS_PER_REV
         rpm            = counts_per_sec / params.COUNTS_PER_REV * 60
-        self.vel_label.config(text=f"{deg_per_sec:.1f} °/s   ·   {rpm:.1f} RPM")
+        self._vel_label.setText(f"{deg_per_sec:.1f} °/s   ·   {rpm:.1f} RPM")
 
     # ─────────────────────────────────────────
     #  Eye motion profiles
     # ─────────────────────────────────────────
 
     def _reset_gimbal(self) -> None:
-        """Begin a smooth return of both motors to EYE_CENTER at the current step speed."""
         if not self.port_handler or self._eye_playing or self._eye_rewinding:
             return
         self._gimbal_resetting = True
 
     def _find_eye_profile(self, keyword: str) -> str:
-        """Return the path of the most-recent CSV in eye_motion_profile/ matching *keyword*.
-
-        The lexicographically largest filename is returned, which picks the
-        most-recent date-prefixed file (e.g. 20260604_bells.csv).
-
-        Raises:
-            FileNotFoundError: If no matching CSV exists.
-        """
         folder  = os.path.join(os.path.dirname(__file__), params.EYE_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
         if not matches:
@@ -519,14 +643,8 @@ class ControlWindow:
         """Parse an eye motion CSV and convert to timed motor-count tuples.
 
         CSV columns: t (s), x (deg), y (deg)
-          - positive x = inferior  → DXL_1 position decreases (S key direction)
-          - positive y = nasal     → DXL_2 position decreases (D key direction)
-
-        Motor count formula:
-          m = clamp(EYE_CENTER - angle_deg * COUNTS_PER_DEG, JOINT_MIN, JOINT_MAX)
-
-        Returns:
-            List of (t_seconds, m1_counts, m2_counts) tuples.
+          - positive x = inferior  → DXL_1 position decreases
+          - positive y = nasal     → DXL_2 position decreases
         """
         path = self._find_eye_profile(keyword)
         data: list[tuple[float, int, int]] = []
@@ -545,7 +663,6 @@ class ControlWindow:
         return data
 
     def _start_eye_profile(self, keyword: str) -> None:
-        """Load a profile and begin playback; ignored if already playing."""
         if self._eye_playing or self._eye_rewinding or self._gimbal_resetting:
             return
         try:
@@ -554,7 +671,6 @@ class ControlWindow:
             print(f"[eye profile] {exc}")
             return
 
-        # Reset motors to center before starting
         write_position(self.port_handler, self.packet_handler, params.DXL_1, params.EYE_CENTER)
         write_position(self.port_handler, self.packet_handler, params.DXL_2, params.EYE_CENTER)
         self.pos1 = params.EYE_CENTER
@@ -566,13 +682,13 @@ class ControlWindow:
         self._eye_playing      = True
         self._eye_rewinding    = False
 
-        self._bells_btn.config(state=tk.DISABLED)
-        self._saccadic_btn.config(state=tk.DISABLED)
-        self._eye_progress_bar['value'] = 0
-        self._eye_progress_lbl.config(text="Playing…", fg=_FG)
+        self._bells_btn.setEnabled(False)
+        self._saccadic_btn.setEnabled(False)
+        self._eye_progress_bar.setValue(0)
+        self._eye_progress_lbl.setText("Playing…")
+        self._eye_progress_lbl.setStyleSheet(f"color: {_FG}; background: transparent;")
 
     def _start_eye_rewind(self) -> None:
-        """Generate a ~1.5 s linear interpolation back to EYE_CENTER and start it."""
         n_steps = max(1, round(1.5 * params.LOOP_HZ))
         self._eye_rewind_steps = [
             (
@@ -583,31 +699,31 @@ class ControlWindow:
         ]
         self._eye_rewind_idx = 0
         self._eye_rewinding  = True
-        self._eye_progress_lbl.config(text="Rewinding…", fg=_DIM)
+        self._eye_progress_lbl.setText("Rewinding…")
+        self._eye_progress_lbl.setStyleSheet(f"color: {_DIM}; background: transparent;")
 
     # ─────────────────────────────────────────
     #  Head motion playback
     # ─────────────────────────────────────────
 
     def _play_preset(self, keyword: str) -> None:
-        """Find, load, and immediately start the most-recent profile matching *keyword*."""
         folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{keyword}*.txt'))
         matches += glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
         if not matches:
-            self.file_label.config(text=f"No '{keyword}' profile found", fg=_RED)
+            self.file_label.setText(f"No '{keyword}' profile found")
+            self.file_label.setStyleSheet(f"color: {_RED}; background: transparent;")
             return
-        self._load_file(max(matches))   # lexicographic max → most-recent date prefix
+        self._load_file(max(matches))
         self._start_playback()
 
     def _browse_file(self) -> None:
-        """Open a file-chooser dialog and load the selected head motion CSV."""
-        motion_dir = os.path.join(os.path.dirname(__file__),
-                                  params.HEAD_MOTION_PROFILE_FOLDER)
-        path = filedialog.askopenfilename(
-            initialdir=motion_dir,
-            title="Select head motion profile",
-            filetypes=[("Text/CSV files", "*.txt *.csv"), ("All files", "*.*")],
+        motion_dir = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select head motion profile",
+            motion_dir,
+            "Text/CSV files (*.txt *.csv);;All files (*.*)",
         )
         if path:
             self._load_file(path)
@@ -621,24 +737,15 @@ class ControlWindow:
           pitch — rotation about Y=nasal  (nodding);    driven by gyro1
           roll  — rotation about X=inferior (lat tilt); driven by gyro0
 
-        Timestamps are sample indices; multiplying by 0.001 converts them to
-        seconds (1 kHz → 1 sample per ms → 0.001 s per count).  The initial
-        sample defines t=0 s and 0°/0° orientation.
+        Timestamps are sample indices; multiplying by 0.001 converts to seconds
+        (1 kHz sampling).  The initial sample defines t=0 s and 0°/0° orientation.
 
         Fusion pipeline
         ───────────────
-        1. Accelerometer IIR low-pass filter (HEAD_ACCEL_LPF_BETA, ≈8 Hz cutoff):
-               ax_f[n] = β·ax_f[n-1] + (1−β)·ax[n]
-        2. Accel-derived absolute tilt from gravity:
-               pitch_accel = atan2(ax_f, az_f)   (rotation about Y=nasal)
-               roll_accel  = atan2(−ay_f, az_f)  (rotation about X=inferior)
-           Reference angles from sample 0 are subtracted so pose starts at 0°.
-        3. Gyro integration using actual dt from timestamps (handles gaps):
-               pitch_gyro = pitch[n-1] + gyro1·dt
-               roll_gyro  = roll[n-1]  + gyro0·dt
-        4. Complementary filter (HEAD_CF_ALPHA):
-               pitch[n] = α·pitch_gyro + (1−α)·pitch_accel_relative
-               roll[n]  = α·roll_gyro  + (1−α)·roll_accel_relative
+        1. Accelerometer IIR low-pass filter (HEAD_ACCEL_LPF_BETA, ≈8 Hz cutoff)
+        2. Accel-derived absolute tilt from gravity; reference subtracted so pose starts at 0°
+        3. Gyro integration using actual dt from timestamps
+        4. Complementary filter (HEAD_CF_ALPHA)
         """
         raw: list[tuple[float, float, float, float, float, float, float]] = []
         try:
@@ -649,35 +756,34 @@ class ControlWindow:
                     if len(row) < 7:
                         continue
                     raw.append((
-                        float(row[0]),           # sample count
-                        float(row[1]),           # gyro0  °/s  about X=inferior
-                        float(row[2]),           # gyro1  °/s  about Y=nasal
-                        float(row[3]),           # gyro2  °/s  about Z=out-of-face (unused)
-                        float(row[4]),           # act0   g    X=inferior
-                        float(row[5]),           # act1   g    Y=nasal
-                        float(row[6]),           # act2   g    Z=out-of-face
+                        float(row[0]),
+                        float(row[1]),
+                        float(row[2]),
+                        float(row[3]),
+                        float(row[4]),
+                        float(row[5]),
+                        float(row[6]),
                     ))
         except Exception as exc:
-            self.file_label.config(text=f"Error loading file: {exc}", fg=_RED)
+            self.file_label.setText(f"Error loading file: {exc}")
+            self.file_label.setStyleSheet(f"color: {_RED}; background: transparent;")
             return
 
         if not raw:
-            self.file_label.config(text="No valid data found", fg=_RED)
+            self.file_label.setText("No valid data found")
+            self.file_label.setStyleSheet(f"color: {_RED}; background: transparent;")
             return
 
-        alpha = params.HEAD_CF_ALPHA        # complementary filter gyro weight
-        beta  = params.HEAD_ACCEL_LPF_BETA  # accel IIR low-pass weight
+        alpha = params.HEAD_CF_ALPHA
+        beta  = params.HEAD_ACCEL_LPF_BETA
 
-        # Convert sample counter to seconds; subtract first sample to normalise to 0
         t0_s = raw[0][0] * 0.001
-
-        # Initialise filter state from first sample
         _, _, _, _, a0_0, a1_0, a2_0 = raw[0]
-        ax_f, ay_f, az_f = a0_0, a1_0, a2_0   # IIR state (no history yet)
+        ax_f, ay_f, az_f = a0_0, a1_0, a2_0
 
         az_safe   = az_f if abs(az_f) > 1e-6 else 1e-6
-        pitch_ref = math.atan2(ax_f,  az_safe)   # absolute accel pitch at t=0
-        roll_ref  = math.atan2(-ay_f, az_safe)   # absolute accel roll  at t=0
+        pitch_ref = math.atan2(ax_f,  az_safe)
+        roll_ref  = math.atan2(-ay_f, az_safe)
 
         pitch_deg = 0.0
         roll_deg  = 0.0
@@ -686,23 +792,19 @@ class ControlWindow:
         result: list[tuple[float, float, float]] = [(0.0, 0.0, 0.0)]
 
         for sample_count, g0, g1, _g2, a0, a1, a2 in raw[1:]:
-            # Step 1 — accelerometer low-pass filter
             ax_f = beta * ax_f + (1.0 - beta) * a0
             ay_f = beta * ay_f + (1.0 - beta) * a1
             az_f = beta * az_f + (1.0 - beta) * a2
 
-            # Step 2 — accel tilt relative to initial pose
             az_safe     = az_f if abs(az_f) > 1e-6 else 1e-6
             pitch_accel = math.degrees(math.atan2(ax_f,  az_safe) - pitch_ref)
             roll_accel  = math.degrees(math.atan2(-ay_f, az_safe) - roll_ref)
 
-            # Step 3 — gyro integration with actual dt
             t_s   = sample_count * 0.001 - t0_s
-            dt    = max(t_s - t_prev_s, 1e-6)   # guard against duplicate timestamps
-            pitch_gyro = pitch_deg + g1 * dt     # gyro1 → pitch about Y=nasal
-            roll_gyro  = roll_deg  + g0 * dt     # gyro0 → roll  about X=inferior
+            dt    = max(t_s - t_prev_s, 1e-6)
+            pitch_gyro = pitch_deg + g1 * dt
+            roll_gyro  = roll_deg  + g0 * dt
 
-            # Step 4 — complementary filter
             pitch_deg = alpha * pitch_gyro + (1.0 - alpha) * pitch_accel
             roll_deg  = alpha * roll_gyro  + (1.0 - alpha) * roll_accel
 
@@ -711,67 +813,78 @@ class ControlWindow:
 
         self._head_playback_data = result
         self._head_play_idx  = 0
-        self.is_playing    = False
+        self.is_playing      = False
 
         duration_s = result[-1][0]
-        self.file_label.config(text=os.path.basename(path), fg=_FG)
-        self.info_label.config(
-            text=(f"{len(result)} samples  ·  {duration_s:.1f} s  "
-                  f"·  CF α={alpha}  LPF β={beta}"),
-            fg=_DIM,
+        self.file_label.setText(os.path.basename(path))
+        self.file_label.setStyleSheet(f"color: {_FG}; background: transparent;")
+        self.info_label.setText(
+            f"{len(result)} samples  ·  {duration_s:.1f} s  "
+            f"·  CF α={alpha}  LPF β={beta}"
         )
-        self.play_btn.config(state=tk.NORMAL)
-        self.progress_label.config(text="")
-        self.progress_bar['value'] = 0
+        self.play_btn.setEnabled(True)
+        self.progress_label.setText("")
+        self.progress_bar.setValue(0)
 
     def _start_playback(self) -> None:
-        """Begin replaying the loaded head motion file."""
         if not self._head_playback_data or not self.robot:
             return
-        self._head_play_idx   = 0
-        self.prev_pitch     = 0.0   # data is baseline-relative; starts at 0
+        self._head_play_idx = 0
+        self.prev_pitch     = 0.0
         self.prev_roll      = 0.0
         self.playback_start = time.monotonic()
         self.is_playing     = True
-        if self._rest_btn:
-            self._rest_btn.config(state=tk.DISABLED)
-        self.play_btn.config(state=tk.DISABLED)
-        self.stop_btn.config(state=tk.NORMAL)
-        self.progress_bar['value'] = 0
-        self.progress_label.config(text="Playing…")
+        for btn in self._preset_btns:
+            btn.setEnabled(False)
+        self.play_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Playing…")
         print(f"[playback] robot={self.robot}, samples={len(self._head_playback_data)}, use_head={self.use_head}")
 
+    def _on_stop_pressed(self) -> None:
+        """Stop button handler.
+
+        During forward playback: trigger return-to-home rewind.
+        During rewind:           abort immediately.
+        """
+        if self._head_rewinding:
+            self._stop_playback()
+        elif self.is_playing:
+            self._start_head_rewind()
 
     def _stop_playback(self) -> None:
         """Halt head motion playback and clear the robot's motion queue.
 
         ClearMotion() empties the queue but also pauses it; ResumeMotion()
-        re-opens it so subsequent commands (jog buttons, next playback) are
-        accepted without needing a full reconnect.
+        re-opens it so subsequent commands are accepted without a reconnect.
         """
-        self.is_playing = False
+        self.is_playing      = False
+        self._head_rewinding = False
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(100)
         if self.robot:
             try:
                 self.robot.ClearMotion()
                 self.robot.ResumeMotion()
             except Exception:
                 pass
-        if self._rest_btn:
-            self._rest_btn.config(state=tk.NORMAL)
-        self.play_btn.config(state=tk.NORMAL if self._head_playback_data else tk.DISABLED)
-        self.stop_btn.config(state=tk.DISABLED)
-        self.progress_label.config(text="Stopped")
+        for btn in self._preset_btns:
+            btn.setEnabled(True)
+        self.play_btn.setEnabled(bool(self._head_playback_data))
+        self.stop_btn.setEnabled(False)
+        self.progress_label.setText("Stopped")
+        self.progress_label.setStyleSheet(f"color: {_DIM}; background: transparent;")
 
     # ─────────────────────────────────────────
     #  TRF Cartesian jog
     # ─────────────────────────────────────────
 
     def _send_trf_step(self, axis: str, sign: float) -> None:
-        """Send a single incremental TRF move along *axis* in the given *sign* direction."""
         if not self.robot:
             return
-        lin = (self.trf_lin_step_var.get() if self.trf_lin_step_var else 1.0) * sign
-        ang = (self.trf_ang_step_var.get() if self.trf_ang_step_var else 1.0) * sign
+        lin = (self._trf_lin_step.value() if self._trf_lin_step else 1.0) * sign
+        ang = (self._trf_ang_step.value() if self._trf_ang_step else 1.0) * sign
         deltas: dict[str, tuple] = {
             'x':  (lin, 0,   0,   0,   0,   0),
             'y':  (0,   lin, 0,   0,   0,   0),
@@ -788,28 +901,40 @@ class ControlWindow:
             print(f"[trf] {exc}")
 
     def _start_trf_jog(self, axis: str, sign: float) -> None:
-        """Send an immediate step then schedule repeating steps at 5 Hz."""
+        self._trf_jog_axis = axis
+        self._trf_jog_sign = sign
         self._send_trf_step(axis, sign)
-        self._trf_after_id = self.root.after(400, self._repeat_trf_jog, axis, sign)
+        self._trf_jog_timer.setInterval(400)
+        self._trf_jog_timer.start()
 
-    def _repeat_trf_jog(self, axis: str, sign: float) -> None:
-        """Called repeatedly while a jog button is held down."""
-        self._send_trf_step(axis, sign)
-        self._trf_after_id = self.root.after(200, self._repeat_trf_jog, axis, sign)
+    def _repeat_trf_jog(self) -> None:
+        self._send_trf_step(self._trf_jog_axis, self._trf_jog_sign)
+        self._trf_jog_timer.setInterval(200)
 
     def _stop_trf_jog(self) -> None:
-        """Cancel the scheduled repeating TRF jog."""
-        if self._trf_after_id:
-            self.root.after_cancel(self._trf_after_id)
-            self._trf_after_id = None
+        self._trf_jog_timer.stop()
+
+    def _go_init_pose(self) -> None:
+        if not self.robot:
+            return
+        try:
+            self.robot.MoveJoints(*params.ROBOT_HEAD_INIT_POSE)
+            self._cart_pos = [0.0] * 6
+        except Exception as exc:
+            print(f"[init] {exc}")
 
     def _set_trf_home(self) -> None:
-        """Save the current Cartesian offset as the home position."""
         self._home_cart_offset = list(self._cart_pos)
-        print(f"[home] Saved at offset {self._home_cart_offset}")
+        if self.robot:
+            try:
+                joints = self.robot.GetRtTargetJointPos()
+                vals = joints.data if hasattr(joints, 'data') else joints
+                self._head_home_joints = list(vals)
+                print(f"[home] Joint home set: {[round(v, 2) for v in self._head_home_joints]}")
+            except Exception as exc:
+                print(f"[home] Could not read joints: {exc}")
 
     def _go_trf_home(self) -> None:
-        """Move back to the saved home position via a single TRF relative move."""
         if not self.robot:
             return
         delta = [h - c for h, c in zip(self._home_cart_offset, self._cart_pos)]
@@ -822,16 +947,10 @@ class ControlWindow:
             print(f"[home] {exc}")
 
     # ─────────────────────────────────────────
-    #  Joint jog
-    # ─────────────────────────────────────────
-
-
-    # ─────────────────────────────────────────
     #  Robot error recovery
     # ─────────────────────────────────────────
 
     def _reset_robot_error(self) -> None:
-        """Clear any active robot error and resume motion."""
         if not self.robot:
             return
         try:
@@ -841,20 +960,31 @@ class ControlWindow:
         except Exception as exc:
             print(f"[robot] Reset failed: {exc}")
 
+    def _get_robot_pose(self) -> None:
+        if not self.robot or self._pose_label is None:
+            return
+        try:
+            joints = self.robot.GetRtTargetJointPos()
+            vals   = joints.data if hasattr(joints, 'data') else joints
+            text   = "  ".join(f"J{i+1}: {v:.1f}°" for i, v in enumerate(vals))
+            self._pose_label.setText(text)
+            self._pose_label.setStyleSheet(f"color: {_FG}; background: transparent;")
+            print(f"[pose] {text}")
+        except Exception as exc:
+            self._pose_label.setText(f"Error: {exc}")
+            self._pose_label.setStyleSheet(f"color: {_RED}; background: transparent;")
+
     # ─────────────────────────────────────────
     #  Control loop
     # ─────────────────────────────────────────
 
     def _tick(self) -> None:
-        """Main loop called every 1/LOOP_HZ seconds via root.after."""
+        """Main loop called every 1/LOOP_HZ seconds via QTimer."""
         if params.QUIT_FLAG:
-            self._on_close()
+            self.close()
             return
 
-        try:
-            step = self.step_var.get()
-        except tk.TclError:
-            step = params.STEP_SIZE
+        step = self._gimbal_speed_slider.value() if self._gimbal_speed_slider else params.STEP_SIZE
 
         if self.use_eye:
             if self._gimbal_resetting:
@@ -866,10 +996,7 @@ class ControlWindow:
         if self.use_head:
             self._tick_head_playback()
 
-        self.root.after(int(1000 / params.LOOP_HZ), self._tick)
-
     def _tick_gimbal_wasd(self, step: int) -> None:
-        """Process WASD key state and write updated encoder positions."""
         if params.GIMBAL_KEYS['up']:
             new = clamp(self.pos1 + step, params.JOINT_MIN_1, params.JOINT_MAX_1)
             if new != self.pos1:
@@ -893,7 +1020,6 @@ class ControlWindow:
                 write_position(self.port_handler, self.packet_handler, params.DXL_2, self.pos2)
 
     def _tick_gimbal_reset(self, step: int) -> None:
-        """Move each motor one step toward EYE_CENTER; clear flag when both arrive."""
         def _step_toward_center(pos: int) -> int:
             diff = params.EYE_CENTER - pos
             if diff == 0:
@@ -906,7 +1032,6 @@ class ControlWindow:
         if new1 != self.pos1:
             self.pos1 = new1
             write_position(self.port_handler, self.packet_handler, params.DXL_1, self.pos1)
-
         if new2 != self.pos2:
             self.pos2 = new2
             write_position(self.port_handler, self.packet_handler, params.DXL_2, self.pos2)
@@ -915,7 +1040,6 @@ class ControlWindow:
             self._gimbal_resetting = False
 
     def _tick_eye_profile(self) -> None:
-        """Advance eye-profile playback or rewind by one tick."""
         if self._eye_playing and not self._eye_rewinding:
             elapsed = time.monotonic() - self._eye_play_start
             n_total = len(self._eye_profile_data)
@@ -933,9 +1057,8 @@ class ControlWindow:
                 self._start_eye_rewind()
             else:
                 pct = int(50 * self._eye_play_idx / n_total)
-                self._eye_progress_bar['value'] = pct
-                self._eye_progress_lbl.config(
-                    text=f"Playing…  {self._eye_play_idx}/{n_total}", fg=_FG)
+                self._eye_progress_bar.setValue(pct)
+                self._eye_progress_lbl.setText(f"Playing…  {self._eye_play_idx}/{n_total}")
 
         elif self._eye_rewinding:
             if self._eye_rewind_idx < len(self._eye_rewind_steps):
@@ -945,36 +1068,45 @@ class ControlWindow:
                 self.pos1, self.pos2 = m1, m2
                 self._eye_rewind_idx += 1
                 pct = 50 + int(50 * self._eye_rewind_idx / len(self._eye_rewind_steps))
-                self._eye_progress_bar['value'] = pct
+                self._eye_progress_bar.setValue(pct)
             else:
                 self._eye_playing   = False
                 self._eye_rewinding = False
-                self._eye_progress_bar['value'] = 100
-                self._eye_progress_lbl.config(text="Done ✓", fg=_GREEN)
-                self._bells_btn.config(state=tk.NORMAL)
-                self._saccadic_btn.config(state=tk.NORMAL)
+                self._eye_progress_bar.setValue(100)
+                self._eye_progress_lbl.setText("Done ✓")
+                self._eye_progress_lbl.setStyleSheet(f"color: {_GREEN}; background: transparent;")
+                self._bells_btn.setEnabled(True)
+                self._saccadic_btn.setEnabled(True)
 
     def _tick_head_playback(self) -> None:
-        """Advance head motion playback by one 50 Hz tick.
+        """Advance head motion playback (or rewind) by one 50 Hz tick.
 
-        The IMU hardware rate is 1 kHz (1 ms/sample). At the 50 Hz tick rate,
-        each tick covers ~20 samples. Rather than sending one MoveLinRelTrf per
-        sample (which produces 1000 sub-threshold micro-commands per second that the
-        robot silently ignores), all deltas due within this tick are accumulated and
-        sent as a single combined command.
+        Forward pass: accumulate all orientation deltas due within this tick
+        and send a single MoveLinRelTrf.  When the data is exhausted, kick off
+        a linear return-to-home rewind over ~1.5 s.
 
         Coordinate mapping (IMU frame → robot TRF):
-          pitch (sagittal tilt, extension+/flexion−) → UX  scaled by HEAD_PITCH_SIGN
-          roll  (frontal tilt,  right tilt+/left−)   → UZ  scaled by HEAD_ROLL_SIGN
-          yaw   (axial rotation, not in data)         → UY  always 0
+          pitch (sagittal tilt) → UX  scaled by HEAD_PITCH_SIGN
+          roll  (frontal tilt)  → UZ  scaled by HEAD_ROLL_SIGN
         """
         if not self.is_playing or not self.robot:
             return
 
-        # Timestamps in playback_data are in seconds (sample_count × 0.001).
+        if self._head_rewinding:
+            if self._head_return_done:
+                self._head_rewinding   = False
+                self._head_return_done = False
+                self._stop_playback()
+                self.progress_bar.setMinimum(0)
+                self.progress_bar.setMaximum(100)
+                self.progress_bar.setValue(0)
+                self.progress_label.setText("Done ✓")
+                self.progress_label.setStyleSheet(f"color: {_GREEN}; background: transparent;")
+            return
+
+        # Forward playback
         elapsed_s = time.monotonic() - self.playback_start
         n_total   = len(self._head_playback_data)
-
         acc_pitch = 0.0
         acc_roll  = 0.0
 
@@ -982,48 +1114,76 @@ class ControlWindow:
             t_s, pitch, roll = self._head_playback_data[self._head_play_idx]
             if t_s > elapsed_s:
                 break
-
             d_pitch = pitch - self.prev_pitch
             d_roll  = roll  - self.prev_roll
-
-            # Discard outlier jumps (sensor glitches / data gaps > 5°/sample)
             if abs(d_pitch) < 5.0 and abs(d_roll) < 5.0:
                 acc_pitch += d_pitch
                 acc_roll  += d_roll
-
             self.prev_pitch = pitch
             self.prev_roll  = roll
             self._head_play_idx += 1
 
-        # Send one command per tick with the accumulated movement
         if abs(acc_pitch) > 0.01 or abs(acc_roll) > 0.01:
-            dux = params.HEAD_PITCH_SIGN * acc_pitch
-            duz = params.HEAD_ROLL_SIGN  * acc_roll
             try:
-                self.robot.MoveLinRelTrf(0, 0, 0, dux, 0, duz)
+                self.robot.MoveLinRelTrf(
+                    0, 0, 0,
+                    params.HEAD_PITCH_SIGN * acc_pitch,
+                    0,
+                    params.HEAD_ROLL_SIGN * acc_roll,
+                )
             except Exception as exc:
                 print(f"[head playback] {exc}")
 
         if self._head_play_idx >= n_total:
-            self._stop_playback()
-            self.progress_bar['value'] = 100
-            self.progress_label.config(text="Done")
+            self._start_head_rewind()
         else:
             pct = int(100 * self._head_play_idx / n_total)
-            self.progress_bar['value'] = pct
-            self.progress_label.config(text=f"{elapsed_s:.1f} s  ({pct}%)")
+            self.progress_bar.setValue(pct)
+            self.progress_label.setText(f"{elapsed_s:.1f} s  ({pct}%)")
+
+    def _start_head_rewind(self) -> None:
+        """Send MoveJoints to home and wait in a background thread for completion."""
+        if self.robot:
+            try:
+                self.robot.ClearMotion()
+                self.robot.ResumeMotion()
+                self.robot.MoveJoints(*self._head_home_joints)
+            except Exception as exc:
+                print(f"[head return] {exc}")
+        self._head_return_done = False
+        self._head_rewinding   = True
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(0)   # indeterminate / busy animation
+        self.progress_label.setText("Returning home…")
+        self.progress_label.setStyleSheet(f"color: {_DIM}; background: transparent;")
+        threading.Thread(target=self._wait_head_return, daemon=True).start()
+
+    def _wait_head_return(self) -> None:
+        """Block until the robot finishes moving, then signal the tick loop."""
+        try:
+            if self.robot:
+                self.robot.WaitIdle(timeout=30)
+        except Exception as exc:
+            print(f"[head return wait] {exc}")
+        self._head_return_done = True
 
     # ─────────────────────────────────────────
     #  Shutdown
     # ─────────────────────────────────────────
 
+    def closeEvent(self, event) -> None:
+        self._on_close()
+        event.accept()
+
     def _on_close(self) -> None:
-        """Stop all motion, disconnect hardware, and destroy the window."""
+        """Stop all motion, disconnect hardware, and shut down."""
+        self._timer.stop()
+        self._trf_jog_timer.stop()
+
         self._eye_playing   = False
         self._eye_rewinding = False
         if self.is_playing:
             self._stop_playback()
-        self._stop_trf_jog()
         self.listener.stop()
 
         if self.use_eye and self.port_handler:
@@ -1043,4 +1203,3 @@ class ControlWindow:
 
         params.ROBOT_INSTANCE = None
         enable_echo()
-        self.root.destroy()

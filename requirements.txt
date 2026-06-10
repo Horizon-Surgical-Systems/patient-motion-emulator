@@ -1,3 +1,4 @@
 mecademicpy==3.0.3
 dynamixel-sdk==4.0.5
 pynput==1.8.2
+pyqt6
