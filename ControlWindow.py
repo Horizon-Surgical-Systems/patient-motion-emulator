@@ -25,106 +25,27 @@ from PyQt6.QtWidgets import (
 )
 
 import Parameter as params
-from Utils import clamp, disable_motor, enable_echo, write_position
-
+from Utils import (
+    clamp, disable_motor, enable_echo, write_position,
+    lighten_color as _lighten, btn_qss as _btn_qss, global_qss as _global_qss,
+)
 
 # ─────────────────────────────────────────────
-#  Dark UI palette (Catppuccin Mocha)
+#  Colour aliases (sourced from Parameter.py)
 # ─────────────────────────────────────────────
 
-_BG    = "#1e1e2e"
-_CARD  = "#2a2a3e"
-_ACCT  = "#7c6af5"
-_FG    = "#cdd6f4"
-_DIM   = "#6c7086"
-_SEP   = "#313244"
-
-_BTN_PURPLE = "#c4bbfc"
-_BTN_GREEN  = "#a6e3a1"
-_BTN_RED    = "#f38ba8"
-_BTN_GRAY   = "#9399b2"
-
-_GREEN = "#a6e3a1"
-_RED   = "#f38ba8"
-
-
-def _lighten(hex_color: str, amount: int = 25) -> str:
-    r = min(255, int(hex_color[1:3], 16) + amount)
-    g = min(255, int(hex_color[3:5], 16) + amount)
-    b = min(255, int(hex_color[5:7], 16) + amount)
-    return f'#{r:02x}{g:02x}{b:02x}'
-
-
-def _btn_qss(color: str) -> str:
-    """QSS string for a flat button with the given background color."""
-    hover = _lighten(color)
-    fs = params.UI_FONT_SIZE
-    return f"""
-        QPushButton {{
-            background-color: {color};
-            color: black;
-            border: none;
-            border-radius: 4px;
-            padding: 5px 10px;
-            font-family: Arial;
-            font-size: {fs}pt;
-            font-weight: bold;
-        }}
-        QPushButton:hover {{ background-color: {hover}; }}
-        QPushButton:pressed {{ background-color: {color}; }}
-        QPushButton:disabled {{ background-color: {_DIM}; color: #888888; }}
-    """
-
-
-def _global_qss() -> str:
-    """Build the application stylesheet from the current Parameter values."""
-    fs = params.UI_FONT_SIZE
-    return f"""
-QMainWindow, QWidget {{
-    background-color: {_BG};
-    color: {_FG};
-    font-family: Arial;
-    font-size: {fs}pt;
-}}
-QFrame#card {{
-    background-color: {_BG};
-    border: none;
-}}
-QLabel {{ background: transparent; color: {_FG}; }}
-QProgressBar {{
-    background-color: {_SEP};
-    border: none;
-    border-radius: 3px;
-    max-height: 8px;
-}}
-QProgressBar::chunk {{ background-color: {_ACCT}; border-radius: 3px; }}
-QSlider::groove:horizontal {{
-    background: {_SEP};
-    height: 4px;
-    border-radius: 2px;
-}}
-QSlider::handle:horizontal {{
-    background: {_ACCT};
-    width: 12px;
-    height: 12px;
-    margin: -4px 0;
-    border-radius: 6px;
-}}
-QSlider::sub-page:horizontal {{ background: {_ACCT}; border-radius: 2px; }}
-QDoubleSpinBox {{
-    background-color: {_BG};
-    color: {_FG};
-    border: 1px solid {_SEP};
-    border-radius: 3px;
-    padding: 2px 4px;
-    selection-background-color: {_ACCT};
-}}
-QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-    background-color: {_SEP};
-    border: none;
-    width: 14px;
-}}
-"""
+_BG         = params.UI_BG_COLOR
+_CARD       = params.UI_CARD_COLOR
+_ACCT       = params.UI_ACCENT_COLOR
+_FG         = params.UI_FG_COLOR
+_DIM        = params.UI_DIM_COLOR
+_SEP        = params.UI_SEP_COLOR
+_BTN_PURPLE = params.UI_BTN_PURPLE
+_BTN_GREEN  = params.UI_BTN_GREEN
+_BTN_RED    = params.UI_BTN_RED
+_BTN_GRAY   = params.UI_BTN_GRAY
+_GREEN      = params.UI_BTN_GREEN
+_RED        = params.UI_BTN_RED
 
 
 class ControlWindow(QMainWindow):
@@ -178,7 +99,18 @@ class ControlWindow(QMainWindow):
         self._eye_progress_lbl: Optional[QLabel]       = None
 
         # Head motion preset UI widgets
-        self._preset_btns: list[QPushButton] = []
+        self._preset_btns:      list[QPushButton] = []   # legacy — kept for _load_file enable
+        self._breath_start_btn: Optional[QPushButton] = None
+        self._stop_breath_btn:  Optional[QPushButton] = None
+        self._interrupt_btns:   list[QPushButton] = []
+
+        # Breathing loop state
+        self._breathing:           bool  = False
+        self._resume_breath:       bool  = False
+        self._breath_resume_idx:   int   = 0
+        self._breath_resume_pitch: float = 0.0
+        self._breath_resume_roll:  float = 0.0
+        self._breath_resume_t:     float = 0.0
 
         # Gimbal reset state
         self._gimbal_resetting = False
@@ -462,21 +394,30 @@ class ControlWindow(QMainWindow):
         layout.addWidget(self._lbl("Motion Playback", params.UI_FONT_SIZE + 1, bold=True))
         self._sep(layout)
 
-        # Preset buttons
-        layout.addWidget(self._lbl("Preset", color=_DIM))
+        # Breathing loop
+        layout.addWidget(self._lbl("Breathing", color=_DIM))
+
+        self._breath_start_btn = self._btn("▶  Breathe", self._start_breathing, color=_BTN_GREEN)
+        self._breath_start_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        layout.addWidget(self._breath_start_btn)
+
+        self._stop_breath_btn = self._btn("■  Stop Breathing", self._stop_breathing, color=_BTN_RED)
+        self._stop_breath_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._stop_breath_btn.setEnabled(False)
+        layout.addWidget(self._stop_breath_btn)
+
+        self._sep(layout)
+
+        # Interruptions (available while breathing)
+        layout.addWidget(self._lbl("Interruptions", color=_DIM))
         for label, keyword in [
-            ("Rest",         params.HEAD_REST_PROFILE),
             ("Cough",        params.HEAD_COUGH_PROFILE),
             ("Clear Throat", params.HEAD_CLEAR_THROAT_PROFILE),
         ]:
-            btn = self._btn(
-                label,
-                lambda kw=keyword: self._play_preset(kw),
-                color=_BTN_PURPLE,
-            )
+            btn = self._btn(label, lambda kw=keyword: self._play_preset(kw), color=_BTN_PURPLE)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             layout.addWidget(btn)
-            self._preset_btns.append(btn)
+            self._interrupt_btns.append(btn)
 
         self._sep(layout)
 
@@ -703,10 +644,154 @@ class ControlWindow(QMainWindow):
         self._eye_progress_lbl.setStyleSheet(f"color: {_DIM}; background: transparent;")
 
     # ─────────────────────────────────────────
-    #  Head motion playback
+    #  UI state helpers
+    # ─────────────────────────────────────────
+
+    def _set_idle_ui(self) -> None:
+        if self._breath_start_btn: self._breath_start_btn.setEnabled(True)
+        if self._stop_breath_btn:  self._stop_breath_btn.setEnabled(False)
+        for btn in self._interrupt_btns: btn.setEnabled(True)
+        if self.play_btn:  self.play_btn.setEnabled(bool(self._head_playback_data))
+        if self.stop_btn:  self.stop_btn.setEnabled(False)
+
+    def _set_busy_ui(self) -> None:
+        if self._breath_start_btn: self._breath_start_btn.setEnabled(False)
+        if self._stop_breath_btn:  self._stop_breath_btn.setEnabled(False)
+        for btn in self._interrupt_btns: btn.setEnabled(False)
+        if self.play_btn:  self.play_btn.setEnabled(False)
+        if self.stop_btn:  self.stop_btn.setEnabled(True)
+
+    def _set_breathing_ui(self) -> None:
+        if self._breath_start_btn: self._breath_start_btn.setEnabled(False)
+        if self._stop_breath_btn:  self._stop_breath_btn.setEnabled(True)
+        for btn in self._interrupt_btns: btn.setEnabled(True)
+        if self.play_btn:  self.play_btn.setEnabled(False)
+        if self.stop_btn:  self.stop_btn.setEnabled(True)
+
+    # ─────────────────────────────────────────
+    #  Breathing loop
+    # ─────────────────────────────────────────
+
+    def _start_breathing(self) -> None:
+        """Load the rest profile and loop it continuously."""
+        if self._breathing or self.is_playing:
+            return
+        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        matches = glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.txt'))
+        matches += glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.csv'))
+        if not matches:
+            self.progress_label.setText(f"No '{params.HEAD_REST_PROFILE}' profile found")
+            self.progress_label.setStyleSheet(f"color: {_RED}; background: transparent;")
+            return
+        self._load_file(max(matches))
+        if not self._head_playback_data or not self.robot:
+            return
+        self._breathing     = True
+        self._head_play_idx = 0
+        self.prev_pitch     = 0.0
+        self.prev_roll      = 0.0
+        self.playback_start = time.monotonic()
+        self.is_playing     = True
+        self._set_breathing_ui()
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Breathing…")
+        self.progress_label.setStyleSheet(f"color: {_FG}; background: transparent;")
+
+    def _stop_breathing(self) -> None:
+        """Stop the breathing loop and return the robot to home."""
+        self._breathing     = False
+        self._resume_breath = False
+        if not self._head_rewinding and self.is_playing:
+            self._start_head_rewind()
+
+    def _start_interruption(self, keyword: str) -> None:
+        """Pause breathing, play a one-shot interruption, then resume breathing."""
+        # Save breathing position for resume
+        self._breath_resume_idx   = self._head_play_idx
+        self._breath_resume_pitch = self.prev_pitch
+        self._breath_resume_roll  = self.prev_roll
+        data = self._head_playback_data
+        if self._head_play_idx < len(data):
+            self._breath_resume_t = data[self._head_play_idx][0]
+        else:
+            self._breath_resume_t = data[-1][0] if data else 0.0
+
+        self._breathing     = False
+        self._resume_breath = True
+
+        # Halt the current breathing queue
+        if self.robot:
+            try:
+                self.robot.ClearMotion()
+                self.robot.ResumeMotion()
+            except Exception:
+                pass
+
+        # Load the interruption file
+        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        matches = glob.glob(os.path.join(folder, f'*{keyword}*.txt'))
+        matches += glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
+        if not matches:
+            # No file — fall back to continuing breathing
+            self._breathing     = True
+            self._resume_breath = False
+            self._set_breathing_ui()
+            return
+        self._load_file(max(matches))
+
+        # Reset playback timing for the interruption
+        self._head_play_idx = 0
+        self.prev_pitch     = 0.0
+        self.prev_roll      = 0.0
+        self.playback_start = time.monotonic()
+        self.is_playing     = True
+        self._set_busy_ui()
+        self.progress_label.setText(f"Playing {keyword}…")
+        self.progress_label.setStyleSheet(f"color: {_FG}; background: transparent;")
+
+    def _resume_breathing_from_saved(self) -> None:
+        """Reload rest data and resume the breathing loop from the saved index."""
+        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        matches = glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.txt'))
+        matches += glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.csv'))
+        if not matches or not self.robot:
+            self._stop_playback()
+            return
+        self._load_file(max(matches))
+
+        # Robot is at TRF home (0°,0°). Move it to the saved breathing orientation first.
+        rp = self._breath_resume_pitch
+        rr = self._breath_resume_roll
+        if abs(rp) > 0.01 or abs(rr) > 0.01:
+            try:
+                self.robot.MoveLinRelTrf(
+                    0, 0, 0,
+                    params.HEAD_PITCH_SIGN * rp,
+                    0,
+                    params.HEAD_ROLL_SIGN  * rr,
+                )
+            except Exception as exc:
+                print(f"[breath resume] {exc}")
+
+        # Resume playback from the saved index with matching time offset
+        self._head_play_idx = self._breath_resume_idx
+        self.prev_pitch     = rp
+        self.prev_roll      = rr
+        self.playback_start = time.monotonic() - self._breath_resume_t
+        self.is_playing     = True
+        self._breathing     = True
+        self._set_breathing_ui()
+        self.progress_label.setText("Breathing (resumed)…")
+        self.progress_label.setStyleSheet(f"color: {_FG}; background: transparent;")
+
+    # ─────────────────────────────────────────
+    #  Head motion preset (one-shot)
     # ─────────────────────────────────────────
 
     def _play_preset(self, keyword: str) -> None:
+        if self._breathing:
+            self._start_interruption(keyword)
+            return
         folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{keyword}*.txt'))
         matches += glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
@@ -834,23 +919,18 @@ class ControlWindow(QMainWindow):
         self.prev_roll      = 0.0
         self.playback_start = time.monotonic()
         self.is_playing     = True
-        for btn in self._preset_btns:
-            btn.setEnabled(False)
-        self.play_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
+        self._set_busy_ui()
         self.progress_bar.setValue(0)
         self.progress_label.setText("Playing…")
         print(f"[playback] robot={self.robot}, samples={len(self._head_playback_data)}, use_head={self.use_head}")
 
     def _on_stop_pressed(self) -> None:
-        """Stop button handler.
-
-        During forward playback: trigger return-to-home rewind.
-        During rewind:           abort immediately.
-        """
+        """Stop button handler — cancels breathing loop, interruption, or one-shot."""
         if self._head_rewinding:
             self._stop_playback()
         elif self.is_playing:
+            self._breathing     = False
+            self._resume_breath = False
             self._start_head_rewind()
 
     def _stop_playback(self) -> None:
@@ -861,6 +941,8 @@ class ControlWindow(QMainWindow):
         """
         self.is_playing      = False
         self._head_rewinding = False
+        self._breathing      = False
+        self._resume_breath  = False
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         if self.robot:
@@ -869,10 +951,7 @@ class ControlWindow(QMainWindow):
                 self.robot.ResumeMotion()
             except Exception:
                 pass
-        for btn in self._preset_btns:
-            btn.setEnabled(True)
-        self.play_btn.setEnabled(bool(self._head_playback_data))
-        self.stop_btn.setEnabled(False)
+        self._set_idle_ui()
         self.progress_label.setText("Stopped")
         self.progress_label.setStyleSheet(f"color: {_DIM}; background: transparent;")
 
@@ -1096,12 +1175,16 @@ class ControlWindow(QMainWindow):
             if self._head_return_done:
                 self._head_rewinding   = False
                 self._head_return_done = False
-                self._stop_playback()
-                self.progress_bar.setMinimum(0)
-                self.progress_bar.setMaximum(100)
-                self.progress_bar.setValue(0)
-                self.progress_label.setText("Done ✓")
-                self.progress_label.setStyleSheet(f"color: {_GREEN}; background: transparent;")
+                if self._resume_breath:
+                    self._resume_breath = False
+                    self._resume_breathing_from_saved()
+                else:
+                    self._stop_playback()
+                    self.progress_bar.setMinimum(0)
+                    self.progress_bar.setMaximum(100)
+                    self.progress_bar.setValue(0)
+                    self.progress_label.setText("Done ✓")
+                    self.progress_label.setStyleSheet(f"color: {_GREEN}; background: transparent;")
             return
 
         # Forward playback
@@ -1135,11 +1218,21 @@ class ControlWindow(QMainWindow):
                 print(f"[head playback] {exc}")
 
         if self._head_play_idx >= n_total:
-            self._start_head_rewind()
+            if self._breathing:
+                # Seamless loop: restart from the beginning
+                self._head_play_idx = 0
+                self.prev_pitch     = 0.0
+                self.prev_roll      = 0.0
+                self.playback_start = time.monotonic()
+            else:
+                self._start_head_rewind()
         else:
             pct = int(100 * self._head_play_idx / n_total)
             self.progress_bar.setValue(pct)
-            self.progress_label.setText(f"{elapsed_s:.1f} s  ({pct}%)")
+            if self._breathing:
+                self.progress_label.setText(f"Breathing…  {elapsed_s:.1f} s  ({pct}%)")
+            else:
+                self.progress_label.setText(f"{elapsed_s:.1f} s  ({pct}%)")
 
     def _start_head_rewind(self) -> None:
         """Send MoveJoints to home and wait in a background thread for completion."""

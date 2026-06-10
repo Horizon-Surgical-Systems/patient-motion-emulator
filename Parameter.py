@@ -172,7 +172,7 @@ HEAD_BASELINE_MS = 500
 HEAD_MOTION_PROFILE_FOLDER = 'head_motion_profile'
 EYE_MOTION_PROFILE_FOLDER  = 'eye_motion_profile'
 
-HEAD_REST_PROFILE         = '01_rest_2'
+HEAD_REST_PROFILE         = 'rohit_rest'
 HEAD_COUGH_PROFILE        = '08_cough'
 HEAD_CLEAR_THROAT_PROFILE = '09_clear_throat'
 
@@ -182,6 +182,18 @@ HEAD_CLEAR_THROAT_PROFILE = '09_clear_throat'
 
 UI_FONT_SIZE        = 12    # pt — base font size for the control window
 UI_LEFT_COL_WIDTH   = 320   # px — fixed width of the left column
+
+# Colour palette (Catppuccin Mocha)
+UI_BG_COLOR     = "#1e1e2e"   # window / page background
+UI_CARD_COLOR   = "#2a2a3e"   # card surface
+UI_ACCENT_COLOR = "#7c6af5"   # accent (labels, progress bar)
+UI_FG_COLOR     = "#cdd6f4"   # primary text
+UI_DIM_COLOR    = "#6c7086"   # secondary text / disabled
+UI_SEP_COLOR    = "#313244"   # separators / trough
+UI_BTN_PURPLE   = "#c4bbfc"   # accent actions  (Browse, Set Home)
+UI_BTN_GREEN    = "#a6e3a1"   # positive actions (Play, Go Home)
+UI_BTN_RED      = "#f38ba8"   # destructive      (Stop, Reset Error)
+UI_BTN_GRAY     = "#9399b2"   # hold-to-jog / neutral
 
 # ─────────────────────────────────────────────
 #  Runtime State

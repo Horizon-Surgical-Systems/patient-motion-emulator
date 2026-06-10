@@ -114,3 +114,92 @@ def disable_motor(
 ) -> None:
     """Release torque on *motor_id*."""
     packet.write1ByteTxRx(port, motor_id, params.ADDR_TORQUE_ENABLE, 0)
+
+
+# ─────────────────────────────────────────────
+#  UI stylesheet helpers
+# ─────────────────────────────────────────────
+
+def lighten_color(hex_color: str, amount: int = 25) -> str:
+    """Return hex_color brightened by amount per channel (capped at 255)."""
+    r = min(255, int(hex_color[1:3], 16) + amount)
+    g = min(255, int(hex_color[3:5], 16) + amount)
+    b = min(255, int(hex_color[5:7], 16) + amount)
+    return f'#{r:02x}{g:02x}{b:02x}'
+
+
+def btn_qss(color: str) -> str:
+    """QSS string for a flat QPushButton with the given background color."""
+    hover = lighten_color(color)
+    fs    = params.UI_FONT_SIZE
+    dim   = params.UI_DIM_COLOR
+    return f"""
+        QPushButton {{
+            background-color: {color};
+            color: black;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            font-family: Arial;
+            font-size: {fs}pt;
+            font-weight: bold;
+        }}
+        QPushButton:hover {{ background-color: {hover}; }}
+        QPushButton:pressed {{ background-color: {color}; }}
+        QPushButton:disabled {{ background-color: {dim}; color: #888888; }}
+    """
+
+
+def global_qss() -> str:
+    """Build the application-wide Qt stylesheet from Parameter UI values."""
+    fs   = params.UI_FONT_SIZE
+    bg   = params.UI_BG_COLOR
+    fg   = params.UI_FG_COLOR
+    sep  = params.UI_SEP_COLOR
+    acct = params.UI_ACCENT_COLOR
+    return f"""
+QMainWindow, QWidget {{
+    background-color: {bg};
+    color: {fg};
+    font-family: Arial;
+    font-size: {fs}pt;
+}}
+QFrame#card {{
+    background-color: {bg};
+    border: none;
+}}
+QLabel {{ background: transparent; color: {fg}; }}
+QProgressBar {{
+    background-color: {sep};
+    border: none;
+    border-radius: 3px;
+    max-height: 8px;
+}}
+QProgressBar::chunk {{ background-color: {acct}; border-radius: 3px; }}
+QSlider::groove:horizontal {{
+    background: {sep};
+    height: 4px;
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    background: {acct};
+    width: 12px;
+    height: 12px;
+    margin: -4px 0;
+    border-radius: 6px;
+}}
+QSlider::sub-page:horizontal {{ background: {acct}; border-radius: 2px; }}
+QDoubleSpinBox {{
+    background-color: {bg};
+    color: {fg};
+    border: 1px solid {sep};
+    border-radius: 3px;
+    padding: 2px 4px;
+    selection-background-color: {acct};
+}}
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
+    background-color: {sep};
+    border: none;
+    width: 14px;
+}}
+"""
