@@ -45,13 +45,13 @@ pip install -r requirements.txt
 
 ```bash
 # Head + eye (default)
-python control_patient_motion.py
+python main.py
 
 # Head only (no gimbal)
-python control_patient_motion.py --head
+python main.py --head
 
 # Eye gimbal only (no Meca500)
-python control_patient_motion.py --eye
+python main.py --eye
 ```
 
 On launch the script:
@@ -63,8 +63,6 @@ On launch the script:
 
 | Script | Purpose |
 |--------|---------|
-| `main_head_rotation.py` | Interactive CLI — send TRF rotation commands to the Meca500 |
-| `main_eye_rotation.py` | Interactive CLI — command temporal/nasal/superior/inferior eye rotations |
 | `keyboard_gimbal_control.py` | WASD keyboard control of the eye gimbal (terminal) |
 
 ---
@@ -225,12 +223,10 @@ All tunable constants live here. Key sections:
 
 ```
 meca_arm_trajectory_planning/
-├── control_patient_motion.py   # Main entry point (GUI)
+├── main.py                     # Main entry point (GUI)
 ├── ControlWindow.py            # PyQt6 control window
 ├── Parameter.py                # All configuration constants
 ├── Utils.py                    # Shared utilities (motor I/O, UI helpers)
-├── main_head_rotation.py       # CLI — interactive Meca500 rotation commands
-├── main_eye_rotation.py        # CLI — interactive eye gimbal rotation commands
 ├── keyboard_gimbal_control.py  # Terminal WASD gimbal control
 ├── dynamixel_motor_control.py  # Low-level Dynamixel test script
 ├── requirements.txt

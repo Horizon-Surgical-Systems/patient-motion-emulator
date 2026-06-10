@@ -1,0 +1,17 @@
+created: 2026-06-04 13:45:19.570509
+description: 69 Yo M, Divide And Conquer, Nuclear 2 Cataract, Toric Iol
+columns:
+- t
+- x
+- y
+units:
+  t: seconds
+  x: degrees, where positive x is rotation towards inferior
+  y: degrees, where positive y is rotation towards nasal
+sample_rate_hz: 50
+n_samples: 598
+duration_sec: 11.94
+eye_laterality: OD
+source: anibal | 69 yo M, divide and conquer, nuclear 2 cataract, toric IOL
+initial_time_padding_sec: 1.0
+final_time_padding_sec: 1.0

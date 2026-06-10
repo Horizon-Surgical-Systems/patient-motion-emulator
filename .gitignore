@@ -219,7 +219,3 @@ __marimo__/
 
 # MacOS
 .DS_Store
-
-# Custom
-/head_motion_profile/
-/eye_motion_profile/
