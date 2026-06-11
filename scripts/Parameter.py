@@ -18,7 +18,7 @@ ROBOT_EYE_PUCK_INIT_POSE = [0.0, -20.0, 20.0, 0.0, -90.0, 0.0]
 EYE_PUCK_OFFSET          = [0.0, 0.0, 40.0]   # [X, Y, Z] mm
 
 # Joint angles J1–J6 in degrees
-ROBOT_HEAD_INIT_POSE = [0, -30, 30, 90, -90, 0]
+ROBOT_HEAD_INIT_POSE = [0, 0, 30, 90, -90, 30]
 
 # TRF origin offset from flange [X, Y, Z] in mm
 HEAD_OFFSET = [0.0, -80.0, 0.0]

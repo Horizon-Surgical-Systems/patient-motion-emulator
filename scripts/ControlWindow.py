@@ -30,6 +30,9 @@ from Utils import (
     lighten_color as _lighten, btn_qss as _btn_qss, global_qss as _global_qss,
 )
 
+# Profile folders live at the project root, one level above scripts/
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # ─────────────────────────────────────────────
 #  Colour aliases (sourced from Parameter.py)
 # ─────────────────────────────────────────────
@@ -91,10 +94,12 @@ class ControlWindow(QMainWindow):
         self._eye_rewinding    = False
         self._eye_rewind_steps: list[tuple[int, int]] = []
         self._eye_rewind_idx   = 0
+        self._eye_looping      = False   # saccadic continuous loop
 
         # Eye profile UI widgets (populated in _build_eye_profiles_card)
         self._bells_btn:        Optional[QPushButton]  = None
         self._saccadic_btn:     Optional[QPushButton]  = None
+        self._eye_stop_btn:     Optional[QPushButton]  = None
         self._eye_progress_bar: Optional[QProgressBar] = None
         self._eye_progress_lbl: Optional[QLabel]       = None
 
@@ -105,12 +110,13 @@ class ControlWindow(QMainWindow):
         self._interrupt_btns:   list[QPushButton] = []
 
         # Breathing loop state
-        self._breathing:           bool  = False
-        self._resume_breath:       bool  = False
-        self._breath_resume_idx:   int   = 0
-        self._breath_resume_pitch: float = 0.0
-        self._breath_resume_roll:  float = 0.0
-        self._breath_resume_t:     float = 0.0
+        self._breathing:            bool  = False
+        self._resume_breath:        bool  = False
+        self._breath_loop_restart:  bool  = False  # rehome between iterations
+        self._breath_resume_idx:    int   = 0
+        self._breath_resume_pitch:  float = 0.0
+        self._breath_resume_roll:   float = 0.0
+        self._breath_resume_t:      float = 0.0
 
         # Gimbal reset state
         self._gimbal_resetting = False
@@ -224,7 +230,7 @@ class ControlWindow(QMainWindow):
     # ─────────────────────────────────────────
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Patient Motion Control")
+        self.setWindowTitle("Patient Motion Control v1.0")
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint)
         self.setStyleSheet(_global_qss())
 
@@ -275,17 +281,16 @@ class ControlWindow(QMainWindow):
         body_layout.addWidget(left)
         body_layout.addWidget(right, 1)
 
-        if self.use_eye:
-            self._build_gimbal_speed_card(left)
-
         self._build_key_bindings_card(left)
 
         if self.use_eye:
+            self._build_gimbal_speed_card(left)
             self._build_eye_profiles_card(left)
 
         if self.use_head:
             self._build_motion_playback_card(left)
             self._build_trf_jog_card(right)
+            self._build_copyright(right)
 
         self.adjustSize()
         self.setFixedSize(self.sizeHint())
@@ -356,7 +361,7 @@ class ControlWindow(QMainWindow):
 
     def _build_eye_profiles_card(self, parent: QWidget) -> None:
         card, layout = self._make_card(parent)
-        layout.addWidget(self._lbl("Eye Motion Profiles", params.UI_FONT_SIZE + 1, bold=True))
+        layout.addWidget(self._lbl("Eye Motion Playback", params.UI_FONT_SIZE + 1, bold=True))
         self._sep(layout)
 
         btn_row = QWidget()
@@ -370,15 +375,24 @@ class ControlWindow(QMainWindow):
             color=_BTN_PURPLE,
         )
         self._saccadic_btn = self._btn(
-            "Saccadic",
-            lambda: self._start_eye_profile('saccadic'),
-            color=_BTN_PURPLE,
+            "▶  Saccadic",
+            lambda: self._start_eye_loop('saccadic'),
+            color=_BTN_GREEN,
         )
         self._bells_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._saccadic_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         btn_layout.addWidget(self._bells_btn)
         btn_layout.addWidget(self._saccadic_btn)
         layout.addWidget(btn_row)
+
+        self._eye_stop_btn = self._btn(
+            "■  Stop Saccadic",
+            self._stop_eye_loop,
+            color=_BTN_RED,
+        )
+        self._eye_stop_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._eye_stop_btn.setEnabled(False)
+        layout.addWidget(self._eye_stop_btn)
 
         self._eye_progress_bar = QProgressBar()
         self._eye_progress_bar.setMaximum(100)
@@ -391,7 +405,7 @@ class ControlWindow(QMainWindow):
 
     def _build_motion_playback_card(self, parent: QWidget) -> None:
         card, layout = self._make_card(parent)
-        layout.addWidget(self._lbl("Motion Playback", params.UI_FONT_SIZE + 1, bold=True))
+        layout.addWidget(self._lbl("Head Motion Playback", params.UI_FONT_SIZE + 1, bold=True))
         self._sep(layout)
 
         # Breathing loop
@@ -545,6 +559,30 @@ class ControlWindow(QMainWindow):
         self._pose_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self._pose_label)
 
+    def _build_copyright(self, parent: QWidget) -> None:
+        import datetime
+        year = datetime.date.today().year
+        card, layout = self._make_card(parent)
+        layout.setContentsMargins(14, 8, 14, 8)
+
+        line1 = self._lbl(
+            f"© {year} Horizon Surgical Systems",
+            size=params.UI_FONT_SIZE - 1,
+            bold=True,
+            color=_DIM,
+        )
+        line1.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        line2 = self._lbl(
+            "All rights reserved.",
+            size=params.UI_FONT_SIZE - 2,
+            color=_DIM,
+        )
+        line2.setAlignment(Qt.AlignmentFlag.AlignRight)
+
+        layout.addWidget(line1)
+        layout.addWidget(line2)
+
     # ─────────────────────────────────────────
     #  Gimbal speed display
     # ─────────────────────────────────────────
@@ -573,7 +611,7 @@ class ControlWindow(QMainWindow):
         self._gimbal_resetting = True
 
     def _find_eye_profile(self, keyword: str) -> str:
-        folder  = os.path.join(os.path.dirname(__file__), params.EYE_MOTION_PROFILE_FOLDER)
+        folder  = os.path.join(_PROJECT_ROOT, params.EYE_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
         if not matches:
             raise FileNotFoundError(
@@ -603,6 +641,24 @@ class ControlWindow(QMainWindow):
                 data.append((t, m1, m2))
         return data
 
+    def _start_eye_loop(self, keyword: str) -> None:
+        """Start a continuous saccadic loop (play → rewind to centre → repeat)."""
+        if self._eye_playing or self._eye_rewinding or self._gimbal_resetting:
+            return
+        self._eye_looping = True
+        self._bells_btn.setEnabled(False)
+        self._saccadic_btn.setEnabled(False)
+        self._eye_stop_btn.setEnabled(True)
+        self._start_eye_profile(keyword)
+
+    def _stop_eye_loop(self) -> None:
+        """Stop the saccadic loop and rewind to centre immediately."""
+        self._eye_looping = False
+        self._eye_stop_btn.setEnabled(False)
+        if self._eye_playing and not self._eye_rewinding:
+            self._eye_playing = False
+            self._start_eye_rewind()
+
     def _start_eye_profile(self, keyword: str) -> None:
         if self._eye_playing or self._eye_rewinding or self._gimbal_resetting:
             return
@@ -623,10 +679,12 @@ class ControlWindow(QMainWindow):
         self._eye_playing      = True
         self._eye_rewinding    = False
 
-        self._bells_btn.setEnabled(False)
-        self._saccadic_btn.setEnabled(False)
+        if not self._eye_looping:
+            self._bells_btn.setEnabled(False)
+            self._saccadic_btn.setEnabled(False)
         self._eye_progress_bar.setValue(0)
-        self._eye_progress_lbl.setText("Playing…")
+        lbl = "Saccadic loop…" if self._eye_looping else "Playing…"
+        self._eye_progress_lbl.setText(lbl)
         self._eye_progress_lbl.setStyleSheet(f"color: {_FG}; background: transparent;")
 
     def _start_eye_rewind(self) -> None:
@@ -676,7 +734,7 @@ class ControlWindow(QMainWindow):
         """Load the rest profile and loop it continuously."""
         if self._breathing or self.is_playing:
             return
-        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        folder  = os.path.join(_PROJECT_ROOT, params.HEAD_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.txt'))
         matches += glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.csv'))
         if not matches:
@@ -728,7 +786,7 @@ class ControlWindow(QMainWindow):
                 pass
 
         # Load the interruption file
-        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        folder  = os.path.join(_PROJECT_ROOT, params.HEAD_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{keyword}*.txt'))
         matches += glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
         if not matches:
@@ -751,7 +809,7 @@ class ControlWindow(QMainWindow):
 
     def _resume_breathing_from_saved(self) -> None:
         """Reload rest data and resume the breathing loop from the saved index."""
-        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        folder  = os.path.join(_PROJECT_ROOT, params.HEAD_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.txt'))
         matches += glob.glob(os.path.join(folder, f'*{params.HEAD_REST_PROFILE}*.csv'))
         if not matches or not self.robot:
@@ -792,7 +850,7 @@ class ControlWindow(QMainWindow):
         if self._breathing:
             self._start_interruption(keyword)
             return
-        folder  = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        folder  = os.path.join(_PROJECT_ROOT, params.HEAD_MOTION_PROFILE_FOLDER)
         matches = glob.glob(os.path.join(folder, f'*{keyword}*.txt'))
         matches += glob.glob(os.path.join(folder, f'*{keyword}*.csv'))
         if not matches:
@@ -803,7 +861,7 @@ class ControlWindow(QMainWindow):
         self._start_playback()
 
     def _browse_file(self) -> None:
-        motion_dir = os.path.join(os.path.dirname(__file__), params.HEAD_MOTION_PROFILE_FOLDER)
+        motion_dir = os.path.join(_PROJECT_ROOT, params.HEAD_MOTION_PROFILE_FOLDER)
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select head motion profile",
@@ -939,10 +997,11 @@ class ControlWindow(QMainWindow):
         ClearMotion() empties the queue but also pauses it; ResumeMotion()
         re-opens it so subsequent commands are accepted without a reconnect.
         """
-        self.is_playing      = False
-        self._head_rewinding = False
-        self._breathing      = False
-        self._resume_breath  = False
+        self.is_playing           = False
+        self._head_rewinding      = False
+        self._breathing           = False
+        self._resume_breath       = False
+        self._breath_loop_restart = False
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         if self.robot:
@@ -1151,11 +1210,16 @@ class ControlWindow(QMainWindow):
             else:
                 self._eye_playing   = False
                 self._eye_rewinding = False
-                self._eye_progress_bar.setValue(100)
-                self._eye_progress_lbl.setText("Done ✓")
-                self._eye_progress_lbl.setStyleSheet(f"color: {_GREEN}; background: transparent;")
-                self._bells_btn.setEnabled(True)
-                self._saccadic_btn.setEnabled(True)
+                if self._eye_looping:
+                    # Centre is already reached — restart immediately
+                    self._start_eye_profile('saccadic')
+                else:
+                    self._eye_progress_bar.setValue(100)
+                    self._eye_progress_lbl.setText("Done ✓")
+                    self._eye_progress_lbl.setStyleSheet(f"color: {_GREEN}; background: transparent;")
+                    self._bells_btn.setEnabled(True)
+                    self._saccadic_btn.setEnabled(True)
+                    self._eye_stop_btn.setEnabled(False)
 
     def _tick_head_playback(self) -> None:
         """Advance head motion playback (or rewind) by one 50 Hz tick.
@@ -1175,7 +1239,17 @@ class ControlWindow(QMainWindow):
             if self._head_return_done:
                 self._head_rewinding   = False
                 self._head_return_done = False
-                if self._resume_breath:
+                if self._breath_loop_restart:
+                    self._breath_loop_restart = False
+                    self._head_play_idx = 0
+                    self.prev_pitch     = 0.0
+                    self.prev_roll      = 0.0
+                    self.playback_start = time.monotonic()
+                    self.progress_bar.setMinimum(0)
+                    self.progress_bar.setMaximum(100)
+                    self.progress_label.setText("Breathing…")
+                    self.progress_label.setStyleSheet(f"color: {_FG}; background: transparent;")
+                elif self._resume_breath:
                     self._resume_breath = False
                     self._resume_breathing_from_saved()
                 else:
@@ -1219,11 +1293,9 @@ class ControlWindow(QMainWindow):
 
         if self._head_play_idx >= n_total:
             if self._breathing:
-                # Seamless loop: restart from the beginning
-                self._head_play_idx = 0
-                self.prev_pitch     = 0.0
-                self.prev_roll      = 0.0
-                self.playback_start = time.monotonic()
+                # Rehome before next iteration to prevent drift
+                self._breath_loop_restart = True
+                self._start_head_rewind()
             else:
                 self._start_head_rewind()
         else:
@@ -1275,6 +1347,7 @@ class ControlWindow(QMainWindow):
 
         self._eye_playing   = False
         self._eye_rewinding = False
+        self._eye_looping   = False
         if self.is_playing:
             self._stop_playback()
         self.listener.stop()
