@@ -176,7 +176,7 @@ HEAD_MOTION_PROFILE_FOLDER = 'head_motion_profile'
 EYE_MOTION_PROFILE_FOLDER  = 'eye_motion_profile'
 
 HEAD_REST_PROFILE         = 'rohit_rest'
-HEAD_COUGH_PROFILE        = '08_cough'
+HEAD_COUGH_PROFILE        = 'flore_cough'
 HEAD_CLEAR_THROAT_PROFILE = '09_clear_throat'
 
 # ─────────────────────────────────────────────
