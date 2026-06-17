@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 )
 
 import Parameter as params
+from RockerToggle import RockerToggle
 from Utils import (
     clamp, disable_motor, enable_echo, write_position,
     lighten_color as _lighten, btn_qss as _btn_qss, global_qss as _global_qss,
@@ -117,6 +118,16 @@ class ControlWindow(QMainWindow):
         self._breath_resume_pitch:  float = 0.0
         self._breath_resume_roll:   float = 0.0
         self._breath_resume_t:      float = 0.0
+        self._breath_last_home_t:   float = 0.0    # wall-clock of last rehome
+
+        # Eye side (OD = right eye, OS = left eye)
+        self._eye_side: str = 'OD'
+        self._eye_side_toggle: Optional[RockerToggle] = None
+        self._ad_key_lbl:      Optional[QLabel]        = None
+        self._x_neg_btn:     Optional[QPushButton] = None
+        self._x_pos_btn:     Optional[QPushButton] = None
+        self._uz_neg_btn:    Optional[QPushButton] = None
+        self._uz_pos_btn:    Optional[QPushButton] = None
 
         # Gimbal reset state
         self._gimbal_resetting = False
@@ -249,9 +260,9 @@ class ControlWindow(QMainWindow):
 
         parts = []
         if self.use_head:
-            parts.append("Head  (Meca500)")
+            parts.append("Head (Meca500)")
         if self.use_eye:
-            parts.append("Eye  (Dynamixel)")
+            parts.append("Eye (Dynamixel)")
         sub = QLabel("  +  ".join(parts))
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sub.setStyleSheet("color: #ddd6fe; font-size: 12pt; background: transparent;")
@@ -339,25 +350,55 @@ class ControlWindow(QMainWindow):
 
     def _build_key_bindings_card(self, parent: QWidget) -> None:
         card, layout = self._make_card(parent)
+
+        # Header row: "Key Bindings" title
         layout.addWidget(self._lbl("Key Bindings", params.UI_FONT_SIZE + 1, bold=True))
+
+        if self.use_eye:
+            # Laterality row: label + rocker toggle
+            lat_row = QWidget()
+            lat_layout = QHBoxLayout(lat_row)
+            lat_layout.setContentsMargins(0, 4, 0, 2)
+            lat_layout.addWidget(self._lbl("Eye Laterality", color=_DIM))
+            lat_layout.addStretch()
+            self._eye_side_toggle = RockerToggle(
+                'OD', 'OS',
+                initial='OD',
+                on_change=self._on_eye_side_changed,
+            )
+            lat_layout.addWidget(self._eye_side_toggle)
+            layout.addWidget(lat_row)
+
         self._sep(layout)
 
-        bindings: list[tuple[str, str, str]] = []
         if self.use_eye:
-            bindings += [
-                ("W / S",    "Eye  Superior / Inferior", _ACCT),
-                ("A / D",    "Eye  Temporal / Nasal",    _ACCT),
-            ]
-        bindings.append(("Q / ESC", "Quit", _RED))
+            # W/S row (static)
+            ws_row = QWidget()
+            ws_layout = QHBoxLayout(ws_row)
+            ws_layout.setContentsMargins(0, 0, 0, 0)
+            ws_layout.addWidget(self._lbl("W / S", bold=True, color=_ACCT))
+            ws_layout.addStretch()
+            ws_layout.addWidget(self._lbl("Eye  Superior / Inferior", color=_FG))
+            layout.addWidget(ws_row)
 
-        for key_text, action, color in bindings:
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.addWidget(self._lbl(key_text, bold=True, color=color))
-            row_layout.addStretch()
-            row_layout.addWidget(self._lbl(action, color=_FG))
-            layout.addWidget(row)
+            # A/D row (label stored for OD/OS updates)
+            ad_row = QWidget()
+            ad_layout = QHBoxLayout(ad_row)
+            ad_layout.setContentsMargins(0, 0, 0, 0)
+            ad_layout.addWidget(self._lbl("A / D", bold=True, color=_ACCT))
+            ad_layout.addStretch()
+            self._ad_key_lbl = self._lbl("Eye  Temporal / Nasal", color=_FG)
+            ad_layout.addWidget(self._ad_key_lbl)
+            layout.addWidget(ad_row)
+
+        # Q/ESC row (static)
+        quit_row = QWidget()
+        quit_layout = QHBoxLayout(quit_row)
+        quit_layout.setContentsMargins(0, 0, 0, 0)
+        quit_layout.addWidget(self._lbl("Q / ESC", bold=True, color=_RED))
+        quit_layout.addStretch()
+        quit_layout.addWidget(self._lbl("Quit", color=_FG))
+        layout.addWidget(quit_row)
 
     def _build_eye_profiles_card(self, parent: QWidget) -> None:
         card, layout = self._make_card(parent)
@@ -476,7 +517,7 @@ class ControlWindow(QMainWindow):
 
     def _build_trf_jog_card(self, parent: QWidget) -> None:
         card, layout = self._make_card(parent)
-        layout.addWidget(self._lbl("TRF Cartesian Jog", params.UI_FONT_SIZE + 1, bold=True))
+        layout.addWidget(self._lbl("Head Positioning", params.UI_FONT_SIZE + 1, bold=True))
         self._sep(layout)
 
         go_init_btn = self._btn("Go Init", self._go_init_pose, color=_BTN_PURPLE)
@@ -514,13 +555,18 @@ class ControlWindow(QMainWindow):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 3, 0, 3)
-            row_layout.addWidget(self._jog_btn(f"← {neg_lbl}", axis, -1))
+            neg_btn = self._jog_btn(f"← {neg_lbl}", axis, -1)
+            pos_btn = self._jog_btn(f"{pos_lbl} →", axis, +1)
+            if axis == 'x':
+                self._x_neg_btn = neg_btn
+                self._x_pos_btn = pos_btn
+            row_layout.addWidget(neg_btn)
             row_layout.addStretch()
             axis_lbl = self._lbl(axis.upper(), params.UI_FONT_SIZE + 1, bold=True, color=_ACCT)
             axis_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             row_layout.addWidget(axis_lbl)
             row_layout.addStretch()
-            row_layout.addWidget(self._jog_btn(f"{pos_lbl} →", axis, +1))
+            row_layout.addWidget(pos_btn)
             layout.addWidget(row)
 
         # Rotation
@@ -533,13 +579,18 @@ class ControlWindow(QMainWindow):
             row = QWidget()
             row_layout = QHBoxLayout(row)
             row_layout.setContentsMargins(0, 3, 0, 3)
-            row_layout.addWidget(self._jog_btn(f"← {neg_lbl}", axis, -1))
+            neg_btn = self._jog_btn(f"← {neg_lbl}", axis, -1)
+            pos_btn = self._jog_btn(f"{pos_lbl} →", axis, +1)
+            if axis == 'uz':
+                self._uz_neg_btn = neg_btn
+                self._uz_pos_btn = pos_btn
+            row_layout.addWidget(neg_btn)
             row_layout.addStretch()
             axis_lbl = self._lbl(axis, params.UI_FONT_SIZE + 1, bold=True, color=_ACCT)
             axis_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             row_layout.addWidget(axis_lbl)
             row_layout.addStretch()
-            row_layout.addWidget(self._jog_btn(f"{pos_lbl} →", axis, +1))
+            row_layout.addWidget(pos_btn)
             layout.addWidget(row)
 
         self._sep(layout)
@@ -582,6 +633,28 @@ class ControlWindow(QMainWindow):
 
         layout.addWidget(line1)
         layout.addWidget(line2)
+
+    # ─────────────────────────────────────────
+    #  Eye side toggle (OD / OS)
+    # ─────────────────────────────────────────
+
+    def _on_eye_side_changed(self, side: str) -> None:
+        """Update state and labels when the OD/OS rocker is switched."""
+        self._eye_side = side
+        od = side == 'OD'
+
+        if self._ad_key_lbl:
+            self._ad_key_lbl.setText(
+                "Eye  Temporal / Nasal" if od else "Eye  Nasal / Temporal"
+            )
+
+        if self._x_neg_btn and self._x_pos_btn:
+            self._x_neg_btn.setText("← Nasal"    if od else "← Temporal")
+            self._x_pos_btn.setText("Temporal →" if od else "Nasal →")
+
+        if self._uz_neg_btn and self._uz_pos_btn:
+            self._uz_neg_btn.setText("← Temporal" if od else "← Nasal")
+            self._uz_pos_btn.setText("Nasal →"    if od else "Temporal →")
 
     # ─────────────────────────────────────────
     #  Gimbal speed display
@@ -634,8 +707,11 @@ class ControlWindow(QMainWindow):
                     round(params.EYE_CENTER - float(row['x']) * params.COUNTS_PER_DEG),
                     params.JOINT_MIN_1, params.JOINT_MAX_1,
                 )
+                # OD: positive y = nasal → pos2 increases.
+                # OS: nasal/temporal mirrored → sign flipped.
+                y_sign = +1 if self._eye_side == 'OD' else -1
                 m2 = clamp(
-                    round(params.EYE_CENTER - float(row['y']) * params.COUNTS_PER_DEG),
+                    round(params.EYE_CENTER + y_sign * float(row['y']) * params.COUNTS_PER_DEG),
                     params.JOINT_MIN_2, params.JOINT_MAX_2,
                 )
                 data.append((t, m1, m2))
@@ -744,12 +820,13 @@ class ControlWindow(QMainWindow):
         self._load_file(max(matches))
         if not self._head_playback_data or not self.robot:
             return
-        self._breathing     = True
-        self._head_play_idx = 0
-        self.prev_pitch     = 0.0
-        self.prev_roll      = 0.0
-        self.playback_start = time.monotonic()
-        self.is_playing     = True
+        self._breathing          = True
+        self._breath_last_home_t = time.monotonic()
+        self._head_play_idx      = 0
+        self.prev_pitch          = 0.0
+        self.prev_roll           = 0.0
+        self.playback_start      = time.monotonic()
+        self.is_playing          = True
         self._set_breathing_ui()
         self.progress_bar.setValue(0)
         self.progress_label.setText("Breathing…")
@@ -885,7 +962,7 @@ class ControlWindow(QMainWindow):
 
         Fusion pipeline
         ───────────────
-        1. Accelerometer IIR low-pass filter (HEAD_ACCEL_LPF_BETA, ≈8 Hz cutoff)
+        1. Accelerometer IIR low-pass filter
         2. Accel-derived absolute tilt from gravity; reference subtracted so pose starts at 0°
         3. Gyro integration using actual dt from timestamps
         4. Complementary filter (HEAD_CF_ALPHA)
@@ -1146,13 +1223,16 @@ class ControlWindow(QMainWindow):
                 self.pos1 = new
                 write_position(self.port_handler, self.packet_handler, params.DXL_1, self.pos1)
 
+        # OD: A moves temporal (pos2-), D moves nasal (pos2+).
+        # OS: mirrored — A moves nasal (pos2+), D moves temporal (pos2-).
+        od = self._eye_side == 'OD'
         if params.GIMBAL_KEYS['left']:
-            new = clamp(self.pos2 + step, params.JOINT_MIN_2, params.JOINT_MAX_2)
+            new = clamp(self.pos2 + (step * (-1 if od else +1)), params.JOINT_MIN_2, params.JOINT_MAX_2)
             if new != self.pos2:
                 self.pos2 = new
                 write_position(self.port_handler, self.packet_handler, params.DXL_2, self.pos2)
         elif params.GIMBAL_KEYS['right']:
-            new = clamp(self.pos2 - step, params.JOINT_MIN_2, params.JOINT_MAX_2)
+            new = clamp(self.pos2 + (step * (+1 if od else -1)), params.JOINT_MIN_2, params.JOINT_MAX_2)
             if new != self.pos2:
                 self.pos2 = new
                 write_position(self.port_handler, self.packet_handler, params.DXL_2, self.pos2)
@@ -1240,11 +1320,12 @@ class ControlWindow(QMainWindow):
                 self._head_rewinding   = False
                 self._head_return_done = False
                 if self._breath_loop_restart:
-                    self._breath_loop_restart = False
-                    self._head_play_idx = 0
-                    self.prev_pitch     = 0.0
-                    self.prev_roll      = 0.0
-                    self.playback_start = time.monotonic()
+                    self._breath_loop_restart    = False
+                    self._breath_last_home_t     = time.monotonic()
+                    self._head_play_idx          = 0
+                    self.prev_pitch              = 0.0
+                    self.prev_roll               = 0.0
+                    self.playback_start          = time.monotonic()
                     self.progress_bar.setMinimum(0)
                     self.progress_bar.setMaximum(100)
                     self.progress_label.setText("Breathing…")
@@ -1293,11 +1374,14 @@ class ControlWindow(QMainWindow):
 
         if self._head_play_idx >= n_total:
             if self._breathing:
-                # Rehome before next iteration to prevent drift
                 self._breath_loop_restart = True
                 self._start_head_rewind()
             else:
                 self._start_head_rewind()
+        elif self._breathing and (time.monotonic() - self._breath_last_home_t) >= params.HEAD_BREATH_REHOME_INTERVAL_S:
+            # Periodic rehome every 5 s to cancel accumulated drift
+            self._breath_loop_restart = True
+            self._start_head_rewind()
         else:
             pct = int(100 * self._head_play_idx / n_total)
             self.progress_bar.setValue(pct)

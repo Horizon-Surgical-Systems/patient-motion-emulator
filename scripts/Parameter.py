@@ -132,7 +132,7 @@ HEAD_STEP_DEG = 2         # degrees per loop tick for Meca500 head rotation
 #                    β = exp(−2π·fc·dt); at 1 kHz, β=0.95 ≈ fc 8 Hz.
 #                    Higher β → lower cutoff, more smoothing.
 HEAD_CF_ALPHA        = 0.98   # complementary filter gyro weight
-HEAD_ACCEL_LPF_BETA  = 0.97   # accelerometer IIR low-pass weight (~8 Hz cutoff)
+HEAD_ACCEL_LPF_BETA  = 0.99   # accelerometer IIR low-pass weight (~8 Hz cutoff)
 
 # ─────────────────────────────────────────────
 #  Head Motion Coordinate Mapping
@@ -159,6 +159,9 @@ HEAD_ACCEL_LPF_BETA  = 0.97   # accelerometer IIR low-pass weight (~8 Hz cutoff)
 #
 HEAD_PITCH_SIGN = +1   # +1: IMU extension(+pitch) → robot UX(+); −1: invert
 HEAD_ROLL_SIGN  = +1   # +1: IMU right tilt(+roll)  → robot UZ(+); −1: invert
+
+# How often (seconds) the breathing loop rehomes the robot to cancel drift.
+HEAD_BREATH_REHOME_INTERVAL_S: float = 5.0
 
 # Window used to compute the resting-pose baseline at the start of each file.
 # Samples within this many milliseconds of t=0 are averaged to form the
