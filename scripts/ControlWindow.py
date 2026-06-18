@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 import Parameter as params
 from RockerToggle import RockerToggle
 from Utils import (
-    clamp, disable_motor, enable_echo, write_position,
+    clamp, disable_motor, enable_echo, read_position, write_position,
     lighten_color as _lighten, btn_qss as _btn_qss, global_qss as _global_qss,
 )
 
@@ -345,8 +345,17 @@ class ControlWindow(QMainWindow):
         self._gimbal_speed_slider.valueChanged.connect(self._on_speed_changed)
 
         self._sep(layout)
-        reset_btn = self._btn("Gimbal Reset", self._reset_gimbal, color=_BTN_GRAY, min_width=110)
-        layout.addWidget(reset_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        gimbal_btn_row = QWidget()
+        gb_layout = QHBoxLayout(gimbal_btn_row)
+        gb_layout.setContentsMargins(0, 0, 0, 0)
+        gb_layout.setSpacing(6)
+        reset_btn = self._btn("Gimbal Reset", self._reset_gimbal, color=_BTN_GRAY)
+        reset_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        pose_btn = self._btn("Get Gimbal Pose", self._print_gimbal_pose, color=_BTN_GRAY)
+        pose_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        gb_layout.addWidget(reset_btn)
+        gb_layout.addWidget(pose_btn)
+        layout.addWidget(gimbal_btn_row)
 
     def _build_key_bindings_card(self, parent: QWidget) -> None:
         card, layout = self._make_card(parent)
@@ -682,6 +691,24 @@ class ControlWindow(QMainWindow):
         if not self.port_handler or self._eye_playing or self._eye_rewinding:
             return
         self._gimbal_resetting = True
+
+    def _print_gimbal_pose(self) -> None:
+        """Read present encoder positions from both Dynamixel motors and print them."""
+        if not self.port_handler or not self.packet_handler:
+            print("[gimbal pose] No Dynamixel connection.")
+            return
+        p1 = read_position(self.port_handler, self.packet_handler, params.DXL_1)
+        p2 = read_position(self.port_handler, self.packet_handler, params.DXL_2)
+        if p1 is not None:
+            deg1 = (p1 - params.EYE_CENTER) / params.COUNTS_PER_DEG
+            print(f"[gimbal pose]  DXL_1 (Sup/Inf): {p1} counts  ({deg1:+.2f}°)")
+        else:
+            print("[gimbal pose]  DXL_1 (Sup/Inf): read error")
+        if p2 is not None:
+            deg2 = (p2 - params.EYE_CENTER) / params.COUNTS_PER_DEG
+            print(f"[gimbal pose]  DXL_2 (Tmp/Nsl): {p2} counts  ({deg2:+.2f}°)")
+        else:
+            print("[gimbal pose]  DXL_2 (Tmp/Nsl): read error")
 
     def _find_eye_profile(self, keyword: str) -> str:
         folder  = os.path.join(_PROJECT_ROOT, params.EYE_MOTION_PROFILE_FOLDER)
