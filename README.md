@@ -1,4 +1,4 @@
-# meca_arm_trajectory_planning
+# patient-motion-emulator
 
 Patient motion simulation system for surgical training. Controls a **Meca500 6-DOF robot arm** (head motion) and a **Dynamixel XL-330 gimbal** (eye motion) to reproduce realistic patient head and eye movements from recorded IMU and DM data.
 
