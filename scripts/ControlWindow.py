@@ -92,13 +92,10 @@ class ControlWindow(QMainWindow):
         self._eye_play_idx     = 0
         self._eye_play_start   = 0.0
         self._eye_playing      = False
-        self._eye_rewinding    = False
-        self._eye_rewind_steps: list[tuple[int, int]] = []
-        self._eye_rewind_idx   = 0
         self._eye_looping      = False   # saccadic continuous loop
 
         # Eye profile UI widgets (populated in _build_eye_profiles_card)
-        self._bells_btn:        Optional[QPushButton]  = None
+        self._reflex_btns:      list[QPushButton]      = []   # all one-shot eye buttons
         self._saccadic_btn:     Optional[QPushButton]  = None
         self._eye_stop_btn:     Optional[QPushButton]  = None
         self._eye_progress_bar: Optional[QProgressBar] = None
@@ -153,6 +150,7 @@ class ControlWindow(QMainWindow):
         # Gimbal speed UI
         self._gimbal_speed_slider: Optional[QSlider] = None
         self._vel_label:           Optional[QLabel]  = None
+        self._gimbal_pose_label:   Optional[QLabel]  = None
 
         # TRF Cartesian jog state
         self._trf_lin_step:    Optional[QDoubleSpinBox] = None
@@ -251,25 +249,7 @@ class ControlWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 8)
         root_layout.setSpacing(0)
 
-        # Header banner
-        header = QFrame()
-        header.setStyleSheet(f"background-color: {_ACCT}; border: none;")
-        h_layout = QVBoxLayout(header)
-        h_layout.setContentsMargins(12, 12, 12, 12)
-        h_layout.setSpacing(2)
-
-        parts = []
-        if self.use_head:
-            parts.append("Head (Meca500)")
-        if self.use_eye:
-            parts.append("Eye (Dynamixel)")
-        sub = QLabel("  +  ".join(parts))
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setStyleSheet("color: #ddd6fe; font-size: 12pt; background: transparent;")
-        h_layout.addWidget(sub)
-        root_layout.addWidget(header)
-
-        # Two-column body
+        # Three-column body
         body = QWidget()
         body_layout = QHBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
@@ -283,13 +263,27 @@ class ControlWindow(QMainWindow):
         left_layout.setContentsMargins(4, 4, 4, 4)
         left_layout.setSpacing(8)
 
+        mid = QWidget()
+        mid_layout = QVBoxLayout(mid)
+        mid_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        mid_layout.setContentsMargins(4, 4, 4, 4)
+        mid_layout.setSpacing(8)
+
         right = QWidget()
         right_layout = QVBoxLayout(right)
         right_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         right_layout.setContentsMargins(4, 4, 4, 4)
         right_layout.setSpacing(8)
 
+        # Vertical divider between left (eye) and mid (head motion) columns
+        vdiv = QFrame()
+        vdiv.setFrameShape(QFrame.Shape.VLine)
+        vdiv.setFrameShadow(QFrame.Shadow.Sunken)
+        vdiv.setStyleSheet(f"color: {_SEP}; background: {_SEP}; max-width: 1px;")
+
         body_layout.addWidget(left)
+        body_layout.addWidget(vdiv)
+        body_layout.addWidget(mid, 1)
         body_layout.addWidget(right, 1)
 
         self._build_key_bindings_card(left)
@@ -299,7 +293,7 @@ class ControlWindow(QMainWindow):
             self._build_eye_profiles_card(left)
 
         if self.use_head:
-            self._build_motion_playback_card(left)
+            self._build_motion_playback_card(mid)
             self._build_trf_jog_card(right)
             self._build_copyright(right)
 
@@ -356,6 +350,11 @@ class ControlWindow(QMainWindow):
         gb_layout.addWidget(reset_btn)
         gb_layout.addWidget(pose_btn)
         layout.addWidget(gimbal_btn_row)
+
+        self._gimbal_pose_label = self._lbl("", color=_DIM)
+        self._gimbal_pose_label.setWordWrap(True)
+        self._gimbal_pose_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self._gimbal_pose_label)
 
     def _build_key_bindings_card(self, parent: QWidget) -> None:
         card, layout = self._make_card(parent)
@@ -414,26 +413,38 @@ class ControlWindow(QMainWindow):
         layout.addWidget(self._lbl("Eye Motion Playback", params.UI_FONT_SIZE + 1, bold=True))
         self._sep(layout)
 
-        btn_row = QWidget()
-        btn_layout = QHBoxLayout(btn_row)
-        btn_layout.setContentsMargins(0, 0, 0, 0)
-        btn_layout.setSpacing(6)
+        # ── Reflexes (one-shot) ──────────────────────────────────────────
+        layout.addWidget(self._lbl("Reflexes", color=_DIM))
+        reflex_pairs = [
+            ("Bell's",   params.EYE_BELLS_PROFILE),
+            ("Gaze Aversion",   params.EYE_GAZE_AVERSION_PROFILE),
+            ("Divergent Drift", params.EYE_DIVERGENT_DRIFT_PROFILE),
+            ("Vestibulo-Ocular", params.EYE_VOR_PROFILE),
+        ]
+        for i in range(0, len(reflex_pairs), 2):
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            for label, kw in reflex_pairs[i:i + 2]:
+                btn = self._btn(label, lambda k=kw: self._start_eye_profile(k),
+                                color=_BTN_PURPLE)
+                btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+                row_layout.addWidget(btn)
+                self._reflex_btns.append(btn)
+            layout.addWidget(row)
 
-        self._bells_btn = self._btn(
-            "Bell's Reflex",
-            lambda: self._start_eye_profile('bells'),
-            color=_BTN_PURPLE,
-        )
+        self._sep(layout)
+
+        # ── Saccadic (continuous loop) ───────────────────────────────────
+        layout.addWidget(self._lbl("Saccadic", color=_DIM))
         self._saccadic_btn = self._btn(
             "▶  Saccadic",
-            lambda: self._start_eye_loop('saccadic'),
+            lambda: self._start_eye_loop(params.EYE_SACCADIC_PROFILE),
             color=_BTN_GREEN,
         )
-        self._bells_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._saccadic_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btn_layout.addWidget(self._bells_btn)
-        btn_layout.addWidget(self._saccadic_btn)
-        layout.addWidget(btn_row)
+        layout.addWidget(self._saccadic_btn)
 
         self._eye_stop_btn = self._btn(
             "■  Stop Saccadic",
@@ -443,6 +454,8 @@ class ControlWindow(QMainWindow):
         self._eye_stop_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._eye_stop_btn.setEnabled(False)
         layout.addWidget(self._eye_stop_btn)
+
+        self._sep(layout)
 
         self._eye_progress_bar = QProgressBar()
         self._eye_progress_bar.setMaximum(100)
@@ -475,8 +488,11 @@ class ControlWindow(QMainWindow):
         # Interruptions (available while breathing)
         layout.addWidget(self._lbl("Interruptions", color=_DIM))
         for label, keyword in [
-            ("Cough",        params.HEAD_COUGH_PROFILE),
-            ("Clear Throat", params.HEAD_CLEAR_THROAT_PROFILE),
+            ("Cough",            params.HEAD_COUGH_PROFILE),
+            ("Clear Throat",     params.HEAD_CLEAR_THROAT_PROFILE),
+            ("Head Moving Away", params.HEAD_MOVING_AWAY_PROFILE),
+            ("Verbal Consent",   params.HEAD_VERBAL_CONSENT_PROFILE),
+            ("Hands Moving",     params.HEAD_HANDS_MOVING_PROFILE),
         ]:
             btn = self._btn(label, lambda kw=keyword: self._play_preset(kw), color=_BTN_PURPLE)
             btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -688,12 +704,12 @@ class ControlWindow(QMainWindow):
     # ─────────────────────────────────────────
 
     def _reset_gimbal(self) -> None:
-        if not self.port_handler or self._eye_playing or self._eye_rewinding:
+        if not self.port_handler or self._eye_playing:
             return
         self._gimbal_resetting = True
 
     def _print_gimbal_pose(self) -> None:
-        """Read present encoder positions from both Dynamixel motors and print them."""
+        """Read present encoder positions from both Dynamixel motors and print/display them."""
         if not self.port_handler or not self.packet_handler:
             print("[gimbal pose] No Dynamixel connection.")
             return
@@ -701,14 +717,21 @@ class ControlWindow(QMainWindow):
         p2 = read_position(self.port_handler, self.packet_handler, params.DXL_2)
         if p1 is not None:
             deg1 = (p1 - params.EYE_CENTER) / params.COUNTS_PER_DEG
+            line1 = f"Sup/Inf: {p1} ct  ({deg1:+.2f}°)"
             print(f"[gimbal pose]  DXL_1 (Sup/Inf): {p1} counts  ({deg1:+.2f}°)")
         else:
+            line1 = "Sup/Inf: read error"
             print("[gimbal pose]  DXL_1 (Sup/Inf): read error")
         if p2 is not None:
             deg2 = (p2 - params.EYE_CENTER) / params.COUNTS_PER_DEG
+            line2 = f"Tmp/Nsl: {p2} ct  ({deg2:+.2f}°)"
             print(f"[gimbal pose]  DXL_2 (Tmp/Nsl): {p2} counts  ({deg2:+.2f}°)")
         else:
+            line2 = "Tmp/Nsl: read error"
             print("[gimbal pose]  DXL_2 (Tmp/Nsl): read error")
+        if self._gimbal_pose_label is not None:
+            self._gimbal_pose_label.setText(f"{line1}\n{line2}")
+            self._gimbal_pose_label.setStyleSheet(f"color: {_FG}; background: transparent;")
 
     def _find_eye_profile(self, keyword: str) -> str:
         folder  = os.path.join(_PROJECT_ROOT, params.EYE_MOTION_PROFILE_FOLDER)
@@ -746,24 +769,27 @@ class ControlWindow(QMainWindow):
 
     def _start_eye_loop(self, keyword: str) -> None:
         """Start a continuous saccadic loop (play → rewind to centre → repeat)."""
-        if self._eye_playing or self._eye_rewinding or self._gimbal_resetting:
+        if self._eye_playing or self._gimbal_resetting:
             return
         self._eye_looping = True
-        self._bells_btn.setEnabled(False)
+        for _b in self._reflex_btns: _b.setEnabled(False)
         self._saccadic_btn.setEnabled(False)
         self._eye_stop_btn.setEnabled(True)
         self._start_eye_profile(keyword)
 
     def _stop_eye_loop(self) -> None:
-        """Stop the saccadic loop and rewind to centre immediately."""
+        """Stop the saccadic loop immediately (CSV handles centre return)."""
         self._eye_looping = False
+        self._eye_playing = False
         self._eye_stop_btn.setEnabled(False)
-        if self._eye_playing and not self._eye_rewinding:
-            self._eye_playing = False
-            self._start_eye_rewind()
+        for _b in self._reflex_btns: _b.setEnabled(True)
+        self._saccadic_btn.setEnabled(True)
+        self._eye_progress_bar.setValue(0)
+        self._eye_progress_lbl.setText("Stopped")
+        self._eye_progress_lbl.setStyleSheet(f"color: {_DIM}; background: transparent;")
 
     def _start_eye_profile(self, keyword: str) -> None:
-        if self._eye_playing or self._eye_rewinding or self._gimbal_resetting:
+        if self._eye_playing or self._gimbal_resetting:
             return
         try:
             data = self._load_eye_profile(keyword)
@@ -780,29 +806,14 @@ class ControlWindow(QMainWindow):
         self._eye_play_idx     = 0
         self._eye_play_start   = time.monotonic()
         self._eye_playing      = True
-        self._eye_rewinding    = False
 
         if not self._eye_looping:
-            self._bells_btn.setEnabled(False)
+            for _b in self._reflex_btns: _b.setEnabled(False)
             self._saccadic_btn.setEnabled(False)
         self._eye_progress_bar.setValue(0)
         lbl = "Saccadic loop…" if self._eye_looping else "Playing…"
         self._eye_progress_lbl.setText(lbl)
         self._eye_progress_lbl.setStyleSheet(f"color: {_FG}; background: transparent;")
-
-    def _start_eye_rewind(self) -> None:
-        n_steps = max(1, round(1.5 * params.LOOP_HZ))
-        self._eye_rewind_steps = [
-            (
-                round(self.pos1 + (i / n_steps) * (params.EYE_CENTER - self.pos1)),
-                round(self.pos2 + (i / n_steps) * (params.EYE_CENTER - self.pos2)),
-            )
-            for i in range(1, n_steps + 1)
-        ]
-        self._eye_rewind_idx = 0
-        self._eye_rewinding  = True
-        self._eye_progress_lbl.setText("Rewinding…")
-        self._eye_progress_lbl.setStyleSheet(f"color: {_DIM}; background: transparent;")
 
     # ─────────────────────────────────────────
     #  UI state helpers
@@ -847,6 +858,7 @@ class ControlWindow(QMainWindow):
         self._load_file(max(matches))
         if not self._head_playback_data or not self.robot:
             return
+        self._set_robot_vel(params.HEAD_PLAYBACK_VEL_PCT)
         self._breathing          = True
         self._breath_last_home_t = time.monotonic()
         self._head_play_idx      = 0
@@ -936,6 +948,7 @@ class ControlWindow(QMainWindow):
                 print(f"[breath resume] {exc}")
 
         # Resume playback from the saved index with matching time offset
+        self._set_robot_vel(params.HEAD_PLAYBACK_VEL_PCT)
         self._head_play_idx = self._breath_resume_idx
         self.prev_pitch     = rp
         self.prev_roll      = rr
@@ -1076,6 +1089,7 @@ class ControlWindow(QMainWindow):
     def _start_playback(self) -> None:
         if not self._head_playback_data or not self.robot:
             return
+        self._set_robot_vel(params.HEAD_PLAYBACK_VEL_PCT)
         self._head_play_idx = 0
         self.prev_pitch     = 0.0
         self.prev_roll      = 0.0
@@ -1114,9 +1128,18 @@ class ControlWindow(QMainWindow):
                 self.robot.ResumeMotion()
             except Exception:
                 pass
+        self._set_robot_vel(params.MAX_JOINT_VEL_PERCENTAGE)
         self._set_idle_ui()
         self.progress_label.setText("Stopped")
         self.progress_label.setStyleSheet(f"color: {_DIM}; background: transparent;")
+
+    def _set_robot_vel(self, pct: float) -> None:
+        """Set the Meca500 joint velocity limit (% of maximum)."""
+        if self.robot:
+            try:
+                self.robot.SetJointVelLimit(pct)
+            except Exception as exc:
+                print(f"[vel] SetJointVelLimit({pct}) failed: {exc}")
 
     # ─────────────────────────────────────────
     #  TRF Cartesian jog
@@ -1285,48 +1308,37 @@ class ControlWindow(QMainWindow):
             self._gimbal_resetting = False
 
     def _tick_eye_profile(self) -> None:
-        if self._eye_playing and not self._eye_rewinding:
-            elapsed = time.monotonic() - self._eye_play_start
-            n_total = len(self._eye_profile_data)
+        if not self._eye_playing:
+            return
 
-            while self._eye_play_idx < n_total:
-                t, m1, m2 = self._eye_profile_data[self._eye_play_idx]
-                if t > elapsed:
-                    break
-                write_position(self.port_handler, self.packet_handler, params.DXL_1, m1)
-                write_position(self.port_handler, self.packet_handler, params.DXL_2, m2)
-                self.pos1, self.pos2 = m1, m2
-                self._eye_play_idx += 1
+        elapsed = time.monotonic() - self._eye_play_start
+        n_total = len(self._eye_profile_data)
 
-            if self._eye_play_idx >= n_total:
-                self._start_eye_rewind()
+        while self._eye_play_idx < n_total:
+            t, m1, m2 = self._eye_profile_data[self._eye_play_idx]
+            if t > elapsed:
+                break
+            write_position(self.port_handler, self.packet_handler, params.DXL_1, m1)
+            write_position(self.port_handler, self.packet_handler, params.DXL_2, m2)
+            self.pos1, self.pos2 = m1, m2
+            self._eye_play_idx += 1
+
+        if self._eye_play_idx >= n_total:
+            # CSV includes centre return — no GUI rewind needed
+            self._eye_playing = False
+            if self._eye_looping:
+                self._start_eye_profile('saccadic')
             else:
-                pct = int(50 * self._eye_play_idx / n_total)
-                self._eye_progress_bar.setValue(pct)
-                self._eye_progress_lbl.setText(f"Playing…  {self._eye_play_idx}/{n_total}")
-
-        elif self._eye_rewinding:
-            if self._eye_rewind_idx < len(self._eye_rewind_steps):
-                m1, m2 = self._eye_rewind_steps[self._eye_rewind_idx]
-                write_position(self.port_handler, self.packet_handler, params.DXL_1, m1)
-                write_position(self.port_handler, self.packet_handler, params.DXL_2, m2)
-                self.pos1, self.pos2 = m1, m2
-                self._eye_rewind_idx += 1
-                pct = 50 + int(50 * self._eye_rewind_idx / len(self._eye_rewind_steps))
-                self._eye_progress_bar.setValue(pct)
-            else:
-                self._eye_playing   = False
-                self._eye_rewinding = False
-                if self._eye_looping:
-                    # Centre is already reached — restart immediately
-                    self._start_eye_profile('saccadic')
-                else:
-                    self._eye_progress_bar.setValue(100)
-                    self._eye_progress_lbl.setText("Done ✓")
-                    self._eye_progress_lbl.setStyleSheet(f"color: {_GREEN}; background: transparent;")
-                    self._bells_btn.setEnabled(True)
-                    self._saccadic_btn.setEnabled(True)
-                    self._eye_stop_btn.setEnabled(False)
+                self._eye_progress_bar.setValue(100)
+                self._eye_progress_lbl.setText("Done ✓")
+                self._eye_progress_lbl.setStyleSheet(f"color: {_GREEN}; background: transparent;")
+                for _b in self._reflex_btns: _b.setEnabled(True)
+                self._saccadic_btn.setEnabled(True)
+                self._eye_stop_btn.setEnabled(False)
+        else:
+            pct = int(100 * self._eye_play_idx / n_total)
+            self._eye_progress_bar.setValue(pct)
+            self._eye_progress_lbl.setText(f"Playing…  {self._eye_play_idx}/{n_total}")
 
     def _tick_head_playback(self) -> None:
         """Advance head motion playback (or rewind) by one 50 Hz tick.
@@ -1348,6 +1360,7 @@ class ControlWindow(QMainWindow):
                 self._head_return_done = False
                 if self._breath_loop_restart:
                     self._breath_loop_restart    = False
+                    self._set_robot_vel(params.HEAD_PLAYBACK_VEL_PCT)
                     self._breath_last_home_t     = time.monotonic()
                     self._head_play_idx          = 0
                     self.prev_pitch              = 0.0
@@ -1423,6 +1436,8 @@ class ControlWindow(QMainWindow):
             try:
                 self.robot.ClearMotion()
                 self.robot.ResumeMotion()
+                # Set vel after ClearMotion so it is not flushed from the queue
+                self._set_robot_vel(params.MAX_JOINT_VEL_PERCENTAGE)
                 self.robot.MoveJoints(*self._head_home_joints)
             except Exception as exc:
                 print(f"[head return] {exc}")
@@ -1456,9 +1471,8 @@ class ControlWindow(QMainWindow):
         self._timer.stop()
         self._trf_jog_timer.stop()
 
-        self._eye_playing   = False
-        self._eye_rewinding = False
-        self._eye_looping   = False
+        self._eye_playing = False
+        self._eye_looping = False
         if self.is_playing:
             self._stop_playback()
         self.listener.stop()

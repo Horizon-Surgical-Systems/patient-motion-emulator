@@ -153,25 +153,30 @@ def main() -> None:
                        help='Control head only (Meca500)')
     group.add_argument('--eye',  action='store_true',
                        help='Control eye gimbal only (Dynamixel)')
+    parser.add_argument('--debug', action='store_true',
+                        help='Skip all hardware — open GUI with every panel visible')
     args = parser.parse_args()
 
     use_head = not args.eye
     use_eye  = not args.head
 
-    robot         = None
-    port_handler  = None
+    robot          = None
+    port_handler   = None
     packet_handler = None
 
-    if use_head:
-        robot = _connect_robot()
+    if args.debug:
+        print("[debug] Hardware connections skipped — running in debug mode.")
+    else:
+        if use_head:
+            robot = _connect_robot()
 
-    if use_eye:
-        port_handler, packet_handler = _connect_gimbal()
-        if port_handler is None:
-            if robot:
-                robot.DeactivateRobot()
-                robot.Disconnect()
-            return
+        if use_eye:
+            port_handler, packet_handler = _connect_gimbal()
+            if port_handler is None:
+                if robot:
+                    robot.DeactivateRobot()
+                    robot.Disconnect()
+                return
 
     atexit.register(enable_echo)
     disable_echo()
