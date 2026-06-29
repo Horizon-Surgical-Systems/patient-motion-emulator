@@ -1,0 +1,18 @@
+created: 2026-06-19 14:00:26.120477
+description: Eye rotational motion for Bell's Reflex; mirrored about 10-second mark
+columns:
+- t
+- x
+- y
+units:
+  t: seconds
+  x: degrees, where positive x is rotation towards superior
+  y: degrees, where positive y is rotation towards temporal
+sample_rate_hz: 50
+n_samples: 1094
+duration_sec: 21.86
+eye_laterality: OD
+source: YouTube [CdJjFpKpXnI] Case 3 phaco with axial length 26mm part 1 and strong
+  Bell's reflex
+initial_time_padding_sec: 1.0
+final_time_padding_sec: 1.0

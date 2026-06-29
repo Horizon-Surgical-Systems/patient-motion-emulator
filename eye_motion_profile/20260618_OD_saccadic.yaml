@@ -1,0 +1,18 @@
+created: 2026-06-19 14:00:39.485830
+description: Eye rotational motion for moderate saccadic motion; intended as continuously
+  executable trajectory
+columns:
+- t
+- x
+- y
+units:
+  t: seconds
+  x: degrees, where positive x is rotation towards superior
+  y: degrees, where positive y is rotation towards temporal
+sample_rate_hz: 50
+n_samples: 1005
+duration_sec: 20.080000000000002
+eye_laterality: OD
+source: anibal | 69 yo M, divide and conquer, nuclear 2 cataract, toric IOL
+initial_time_padding_sec: 0.1
+final_time_padding_sec: 0.1

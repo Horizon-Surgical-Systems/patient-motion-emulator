@@ -1,0 +1,18 @@
+created: 2026-06-29 14:18:14.005480
+description: Eye motion for ocular drift; intended as single-executable trajectory.
+  Do NOT combine with saddadic motion, this trajectory already contains it.
+columns:
+- t
+- x
+- y
+units:
+  t: seconds
+  x: degrees, where positive x is rotation towards superior
+  y: degrees, where positive y is rotation towards temporal
+sample_rate_hz: 50
+n_samples: 1000
+duration_sec: 20.0
+eye_laterality: OD
+source: simulation
+x_max_angle_deg: 10.0
+NOISE_FACTOR: 0.8
