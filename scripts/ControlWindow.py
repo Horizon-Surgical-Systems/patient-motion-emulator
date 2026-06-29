@@ -415,24 +415,31 @@ class ControlWindow(QMainWindow):
 
         # ── Reflexes (one-shot) ──────────────────────────────────────────
         layout.addWidget(self._lbl("Reflexes", color=_DIM))
-        reflex_pairs = [
-            ("Bell's",   params.EYE_BELLS_PROFILE),
-            ("Gaze Aversion",   params.EYE_GAZE_AVERSION_PROFILE),
-            ("Divergent Drift", params.EYE_DIVERGENT_DRIFT_PROFILE),
-            ("Vestibulo-Ocular", params.EYE_VOR_PROFILE),
-        ]
-        for i in range(0, len(reflex_pairs), 2):
+
+        def _reflex_row(*pairs):
             row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(6)
-            for label, kw in reflex_pairs[i:i + 2]:
+            rl = QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            for label, kw in pairs:
                 btn = self._btn(label, lambda k=kw: self._start_eye_profile(k),
                                 color=_BTN_PURPLE)
                 btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-                row_layout.addWidget(btn)
+                rl.addWidget(btn)
                 self._reflex_btns.append(btn)
             layout.addWidget(row)
+
+        _reflex_row(("Bell's Reflex",   params.EYE_BELLS_PROFILE),
+                    ("Gaze Aversion",   params.EYE_GAZE_AVERSION_PROFILE))
+        _reflex_row(("Vestibulo-Oculor Reflex (VOR)",             params.EYE_VOR_PROFILE))
+
+        # Divergent Drift subsection
+        self._sep(layout)
+        layout.addWidget(self._lbl("Ocular Drift", color=_DIM))
+        _reflex_row(("Nasal",    params.EYE_DIVERGENT_DRIFT_NASAL_PROFILE),
+                    ("Temporal", params.EYE_DIVERGENT_DRIFT_TEMPORAL_PROFILE))
+        _reflex_row(("Superior", params.EYE_DIVERGENT_DRIFT_SUPERIOR_PROFILE),
+                    ("Inferior", params.EYE_DIVERGENT_DRIFT_INFERIOR_PROFILE))
 
         self._sep(layout)
 
