@@ -34,7 +34,7 @@ MECA500_JOINT_LIMITS = [
 ]
 
 MAX_VELOCITY             = 20    # mm/s — Cartesian TRF move limit
-MAX_JOINT_VEL_PERCENTAGE = 2     # % of max joint velocity for jogging / homing
+MAX_JOINT_VEL_PERCENTAGE = 4     # % of max joint velocity for jogging / homing
 HEAD_PLAYBACK_VEL_PCT    = 50    # % of max joint velocity during profile playback
 JOINT_VEL_MIN            = 0.2  # % — lower bound for joint jog UI slider
 JOINT_VEL_MAX            = 5.0  # % — upper bound for joint jog UI slider
@@ -176,20 +176,20 @@ HEAD_BASELINE_MS = 500
 HEAD_MOTION_PROFILE_FOLDER = 'head_motion_profile'
 EYE_MOTION_PROFILE_FOLDER  = 'eye_motion_profile'
 
-EYE_BELLS_PROFILE           = 'bells'
-EYE_SACCADIC_PROFILE        = 'saccadic'
+EYE_BELLS_PROFILE           = '20260618_OD_bells'
+EYE_SACCADIC_PROFILE        = '20260618_OD_saccadic'
 EYE_GAZE_AVERSION_PROFILE        = 'gaze_aversion'
-EYE_DIVERGENT_DRIFT_NASAL_PROFILE    = 'divergent_drift_nasal'
-EYE_DIVERGENT_DRIFT_TEMPORAL_PROFILE = 'divergent_drift_temporal'
-EYE_DIVERGENT_DRIFT_SUPERIOR_PROFILE = 'divergent_drift_superior'
-EYE_DIVERGENT_DRIFT_INFERIOR_PROFILE = 'divergent_drift_inferior'
+EYE_DIVERGENT_DRIFT_NASAL_PROFILE    = '20260628_OD_ocular_drift_nasal'
+EYE_DIVERGENT_DRIFT_TEMPORAL_PROFILE = '20260628_OD_ocular_drift_temporal'
+EYE_DIVERGENT_DRIFT_SUPERIOR_PROFILE = '20260628_OD_ocular_drift_superior'
+EYE_DIVERGENT_DRIFT_INFERIOR_PROFILE = '20260628_OD_ocular_drift_inferior'
 EYE_VOR_PROFILE                      = 'vor'
 
 HEAD_REST_PROFILE            = 'rohit_rest'
 HEAD_COUGH_PROFILE           = 'flore_cough'
 HEAD_CLEAR_THROAT_PROFILE    = '09_clear_throat'
-HEAD_MOVING_AWAY_PROFILE     = 'brando_fast_head_motion'
-HEAD_VERBAL_CONSENT_PROFILE  = '06_verbal_consent'
+HEAD_MOVING_AWAY_PROFILE     = 'rohit_fast_head_motion'
+HEAD_VERBAL_CONSENT_PROFILE  = 'brando_verbal_consent'
 HEAD_HANDS_MOVING_PROFILE    = 'hands_moving'
 
 # ─────────────────────────────────────────────

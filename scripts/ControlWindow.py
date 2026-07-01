@@ -761,12 +761,12 @@ class ControlWindow(QMainWindow):
             for row in csv.DictReader(f):
                 t  = float(row['t'])
                 m1 = clamp(
-                    round(params.EYE_CENTER - float(row['x']) * params.COUNTS_PER_DEG),
+                    round(params.EYE_CENTER + float(row['x']) * params.COUNTS_PER_DEG),
                     params.JOINT_MIN_1, params.JOINT_MAX_1,
                 )
-                # OD: positive y = nasal → pos2 increases.
+                # OD: positive y = nasal → pos2 decreases.
                 # OS: nasal/temporal mirrored → sign flipped.
-                y_sign = +1 if self._eye_side == 'OD' else -1
+                y_sign = -1 if self._eye_side == 'OD' else +1
                 m2 = clamp(
                     round(params.EYE_CENTER + y_sign * float(row['y']) * params.COUNTS_PER_DEG),
                     params.JOINT_MIN_2, params.JOINT_MAX_2,
@@ -785,7 +785,7 @@ class ControlWindow(QMainWindow):
         self._start_eye_profile(keyword)
 
     def _stop_eye_loop(self) -> None:
-        """Stop the saccadic loop immediately (CSV handles centre return)."""
+        """Stop the saccadic loop and return gimbal to center."""
         self._eye_looping = False
         self._eye_playing = False
         self._eye_stop_btn.setEnabled(False)
@@ -794,6 +794,10 @@ class ControlWindow(QMainWindow):
         self._eye_progress_bar.setValue(0)
         self._eye_progress_lbl.setText("Stopped")
         self._eye_progress_lbl.setStyleSheet(f"color: {_DIM}; background: transparent;")
+        write_position(self.port_handler, self.packet_handler, params.DXL_1, params.EYE_CENTER)
+        write_position(self.port_handler, self.packet_handler, params.DXL_2, params.EYE_CENTER)
+        self.pos1 = params.EYE_CENTER
+        self.pos2 = params.EYE_CENTER
 
     def _start_eye_profile(self, keyword: str) -> None:
         if self._eye_playing or self._gimbal_resetting:
@@ -1269,27 +1273,27 @@ class ControlWindow(QMainWindow):
             self._tick_head_playback()
 
     def _tick_gimbal_wasd(self, step: int) -> None:
+        od = self._eye_side == 'OD'
+        ws_sign = +1 if od else -1
         if params.GIMBAL_KEYS['up']:
-            new = clamp(self.pos1 + step, params.JOINT_MIN_1, params.JOINT_MAX_1)
+            new = clamp(self.pos1 + ws_sign * step, params.JOINT_MIN_1, params.JOINT_MAX_1)
             if new != self.pos1:
                 self.pos1 = new
                 write_position(self.port_handler, self.packet_handler, params.DXL_1, self.pos1)
         elif params.GIMBAL_KEYS['down']:
-            new = clamp(self.pos1 - step, params.JOINT_MIN_1, params.JOINT_MAX_1)
+            new = clamp(self.pos1 - ws_sign * step, params.JOINT_MIN_1, params.JOINT_MAX_1)
             if new != self.pos1:
                 self.pos1 = new
                 write_position(self.port_handler, self.packet_handler, params.DXL_1, self.pos1)
 
-        # OD: A moves temporal (pos2-), D moves nasal (pos2+).
-        # OS: mirrored — A moves nasal (pos2+), D moves temporal (pos2-).
-        od = self._eye_side == 'OD'
+        # A/D same direction for both OD and OS.
         if params.GIMBAL_KEYS['left']:
-            new = clamp(self.pos2 + (step * (-1 if od else +1)), params.JOINT_MIN_2, params.JOINT_MAX_2)
+            new = clamp(self.pos2 - step, params.JOINT_MIN_2, params.JOINT_MAX_2)
             if new != self.pos2:
                 self.pos2 = new
                 write_position(self.port_handler, self.packet_handler, params.DXL_2, self.pos2)
         elif params.GIMBAL_KEYS['right']:
-            new = clamp(self.pos2 + (step * (+1 if od else -1)), params.JOINT_MIN_2, params.JOINT_MAX_2)
+            new = clamp(self.pos2 + step, params.JOINT_MIN_2, params.JOINT_MAX_2)
             if new != self.pos2:
                 self.pos2 = new
                 write_position(self.port_handler, self.packet_handler, params.DXL_2, self.pos2)

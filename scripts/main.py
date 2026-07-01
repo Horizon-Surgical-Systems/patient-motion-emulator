@@ -87,6 +87,8 @@ def _connect_robot() -> Optional[mdr.Robot]:
     try:
         robot = mdr.Robot()
         robot.Connect(address=params.ROBOT_IP_ADDRESS, disconnect_on_exception=False)
+        robot.ResetError()
+        robot.ResumeMotion()
         robot.ActivateRobot()
         robot.ActivateAndHome()
         robot.WaitHomed()
